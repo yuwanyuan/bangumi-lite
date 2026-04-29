@@ -1,0 +1,28 @@
+# Gradle
+.gradle/
+gradle-dist/
+gradle-tmp/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Local configuration
+local.properties
+
+# Android Studio
+.idea/
+*.iml
+*.iws
+*.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+*.html
+test_*.py
+*_test.json
+tag_list.html
+timeline_html.html
+timeline_test.json
+trending_test.json
