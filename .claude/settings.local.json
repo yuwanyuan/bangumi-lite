@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew assembleDebug --no-daemon)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/bangumi/api/master/open-api/v0.yaml\")",
+      "WebFetch(domain:deepwiki.com)",
+      "WebSearch",
+      "Bash(gh api *)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/czy0729/Bangumi/master/src/stores/timeline/action.ts\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/czy0729/Bangumi/master/src/constants/html/index.ts\")"
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- TV body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,38 L78,38 A6,6 0 0,1 84,44 L84,76 A6,6 0 0,1 78,82 L30,82 A6,6 0 0,1 24,76 L24,44 A6,6 0 0,1 30,38 Z"/>
+    <!-- TV antenna left -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,38 L36,26 L40,26 L46,38 Z"/>
+    <!-- TV antenna right -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M66,38 L72,26 L68,26 L62,38 Z"/>
+    <!-- Screen inner area (cutout using evenodd) -->
+    <path
+        android:fillColor="#F06292"
+        android:pathData="M32,46 L76,46 A3,3 0 0,1 79,49 L79,73 A3,3 0 0,1 76,76 L32,76 A3,3 0 0,1 29,73 L29,49 A3,3 0 0,1 32,46 Z"/>
+    <!-- B letter -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M38,52 L38,70 L46,70 C50,70 52,68 52,65 C52,63 51,61 48,60 C50,59 51,58 51,56 C51,53 49,52 46,52 Z M42,55 L45,55 C46.5,55 47,55.5 47,56.5 C47,57.5 46.5,58 45,58 L42,58 Z M42,61 L46,61 C47.5,61 48,61.8 48,63 C48,64.5 47.5,65 46,65 L42,65 Z"/>
+    <!-- L letter -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M56,52 L60,52 L60,66 L67,66 L67,70 L56,70 Z"/>
+</vector>
