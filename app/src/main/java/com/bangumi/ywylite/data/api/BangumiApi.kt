@@ -255,10 +255,9 @@ class BangumiApi {
         offset: Int = 0,
         limit: Int = 200
     ): List<EpisodeCollection> {
-        val response = client.get("/v0/users/-/episodes") {
+        val response = client.get("/v0/users/-/collections/${subjectId}/episodes") {
             withAuth()
             url {
-                parameters.append("subject_id", subjectId.toString())
                 parameters.append("offset", offset.toString())
                 parameters.append("limit", limit.toString())
             }
@@ -268,13 +267,13 @@ class BangumiApi {
     }
 
     suspend fun updateEpisodeStatus(
-        episodeIds: List<Int>,
+        episodeId: Int,
         type: Int = 2
     ) {
-        client.put("/v0/users/-/episodes") {
+        client.put("/v0/users/-/collections/-/episodes/${episodeId}") {
             withAuth()
             contentType(ContentType.Application.Json)
-            setBody(EpisodeStatusPayload(episodeIds, EpisodeStatus.entries.find { it.value == type } ?: EpisodeStatus.Watched))
+            setBody(EpisodeStatusUpdate(type = type))
         }
     }
 

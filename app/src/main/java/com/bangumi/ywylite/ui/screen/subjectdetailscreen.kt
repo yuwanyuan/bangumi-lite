@@ -169,9 +169,21 @@ fun SubjectDetailScreen(
                         app.api.collectSubject(subjectId, type, rate = rate, comment = comment)
                         if (type == 0) {
                             uiState = uiState.copy(userCollection = null)
-                        } else if (token != null) {
+                        } else {
+                            uiState = uiState.copy(
+                                userCollection = uiState.userCollection?.copy(type = type)
+                                    ?: UserCollection(
+                                        subject_id = subjectId,
+                                        type = type,
+                                        rate = rate ?: 0,
+                                        comment = comment ?: ""
+                                    )
+                            )
                             val result = runCatching { app.api.getSubjectCollection(subjectId, token) }
-                            uiState = uiState.copy(userCollection = result.getOrNull())
+                            val freshCollection = result.getOrNull()
+                            if (freshCollection != null) {
+                                uiState = uiState.copy(userCollection = freshCollection)
+                            }
                         }
                     } catch (_: Exception) {}
                 }
@@ -181,10 +193,10 @@ fun SubjectDetailScreen(
                     try {
                         val isWatched = episodeId in uiState.watchedEpisodes
                         if (isWatched) {
-                            app.api.updateEpisodeStatus(listOf(episodeId), 0)
+                            app.api.updateEpisodeStatus(episodeId, 0)
                             uiState = uiState.copy(watchedEpisodes = uiState.watchedEpisodes - episodeId)
                         } else {
-                            app.api.updateEpisodeStatus(listOf(episodeId), 2)
+                            app.api.updateEpisodeStatus(episodeId, 2)
                             uiState = uiState.copy(watchedEpisodes = uiState.watchedEpisodes + episodeId)
                         }
                     } catch (_: Exception) {}
@@ -352,7 +364,12 @@ private fun SubjectDetailContent(
                     }
                 }
 
-                CollectionBar(currentType = uiState.userCollection?.type, onCollect = onCollect)
+                CollectionBar(
+                    currentType = uiState.userCollection?.type,
+                    currentRate = uiState.userCollection?.rate ?: 0,
+                    currentComment = uiState.userCollection?.comment ?: "",
+                    onCollect = onCollect
+                )
 
                 if (subject.summary.isNotEmpty()) {
                     CollapsibleSummary(summary = subject.summary)
@@ -595,21 +612,25 @@ private fun CollectionCountChip(label: String, count: Int, color: Color) {
 @Composable
 private fun CollectionBar(
     currentType: Int?,
+    currentRate: Int = 0,
+    currentComment: String = "",
     onCollect: (Int, String?, Int?) -> Unit
 ) {
     var showDialog by remember { mutableStateOf(false) }
     var selectedType by remember { mutableIntStateOf(currentType ?: 3) }
-    var comment by remember { mutableStateOf("") }
-    var rating by remember { mutableIntStateOf(0) }
+    var comment by remember { mutableStateOf(currentComment) }
+    var rating by remember { mutableIntStateOf(currentRate) }
 
     val isCollected = currentType != null
     val currentColor = collectionTypeColors[currentType] ?: MaterialTheme.colorScheme.primary
     val currentLabel = collectionTypeLabels[currentType] ?: "收藏"
 
-    LaunchedEffect(currentType) {
+    LaunchedEffect(currentType, currentRate, currentComment) {
         if (currentType != null) {
             selectedType = currentType
         }
+        rating = currentRate
+        comment = currentComment
     }
 
     if (isCollected) {

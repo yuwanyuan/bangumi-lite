@@ -1,4 +1,4 @@
-﻿package com.bangumi.ywylite.data.model
+package com.bangumi.ywylite.data.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -202,6 +202,11 @@ data class EpisodeStatusPayload(
     @SerialName("episode_id")
     val episodeId: List<Int>,
     val type: EpisodeStatus
+)
+
+@Serializable
+data class EpisodeStatusUpdate(
+    val type: Int = 2
 )
 
 @Serializable
