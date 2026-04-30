@@ -8,6 +8,10 @@ build/
 # Local configuration
 local.properties
 
+# Keystore
+*.jks
+keystore_base64.txt
+
 # Android Studio
 .idea/
 *.iml
