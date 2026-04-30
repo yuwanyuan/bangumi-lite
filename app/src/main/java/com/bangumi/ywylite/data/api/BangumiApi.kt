@@ -1,4 +1,4 @@
-﻿package com.bangumi.ywylite.data.api
+package com.bangumi.ywylite.data.api
 
 import com.bangumi.ywylite.data.model.*
 import io.ktor.client.*
@@ -199,10 +199,16 @@ class BangumiApi {
         rate: Int? = null,
         comment: String? = null
     ) {
-        client.post("/v0/users/-/collections/${subjectId}") {
-            withAuth()
-            contentType(ContentType.Application.Json)
-            setBody(CollectionModifyPayload(type = type, comment = comment, rate = rate))
+        if (type == 0) {
+            client.delete("/v0/users/-/collections/${subjectId}") {
+                withAuth()
+            }
+        } else {
+            client.post("/v0/users/-/collections/${subjectId}") {
+                withAuth()
+                contentType(ContentType.Application.Json)
+                setBody(CollectionModifyPayload(type = type, comment = comment, rate = rate))
+            }
         }
     }
 

@@ -1,4 +1,4 @@
-﻿package com.bangumi.ywylite.ui.screen
+package com.bangumi.ywylite.ui.screen
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -167,7 +167,9 @@ fun SubjectDetailScreen(
                 scope.launch {
                     try {
                         app.api.collectSubject(subjectId, type, rate = rate, comment = comment)
-                        if (token != null) {
+                        if (type == 0) {
+                            uiState = uiState.copy(userCollection = null)
+                        } else if (token != null) {
                             val result = runCatching { app.api.getSubjectCollection(subjectId, token) }
                             uiState = uiState.copy(userCollection = result.getOrNull())
                         }
@@ -600,17 +602,39 @@ private fun CollectionBar(
     var comment by remember { mutableStateOf("") }
     var rating by remember { mutableIntStateOf(0) }
 
+    val isCollected = currentType != null
     val currentColor = collectionTypeColors[currentType] ?: MaterialTheme.colorScheme.primary
     val currentLabel = collectionTypeLabels[currentType] ?: "收藏"
 
-    OutlinedButton(
-        onClick = { showDialog = true },
-        modifier = Modifier.fillMaxWidth(),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = currentColor)
-    ) {
-        Icon(Icons.Default.Star, contentDescription = null, tint = currentColor, modifier = Modifier.size(16.dp))
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(currentLabel, color = currentColor)
+    LaunchedEffect(currentType) {
+        if (currentType != null) {
+            selectedType = currentType
+        }
+    }
+
+    if (isCollected) {
+        Button(
+            onClick = { showDialog = true },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = currentColor.copy(alpha = 0.15f),
+                contentColor = currentColor
+            )
+        ) {
+            Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(currentLabel, fontWeight = FontWeight.SemiBold)
+        }
+    } else {
+        OutlinedButton(
+            onClick = { showDialog = true },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
+        ) {
+            Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("收藏")
+        }
     }
 
     if (showDialog) {
@@ -665,7 +689,15 @@ private fun CollectionBar(
                 }) { Text("确定") }
             },
             dismissButton = {
-                TextButton(onClick = { showDialog = false }) { Text("取消") }
+                Row {
+                    if (isCollected) {
+                        TextButton(onClick = {
+                            onCollect(0, null, null)
+                            showDialog = false
+                        }) { Text("取消收藏", color = Color(0xFFF44336)) }
+                    }
+                    TextButton(onClick = { showDialog = false }) { Text("取消") }
+                }
             }
         )
     }
