@@ -1,9 +1,11 @@
 <p align="center">
+  <a href="https://github.com/yuwanyuan/bangumi-lite/actions/workflows/build.yml"><img src="https://github.com/yuwanyuan/bangumi-lite/actions/workflows/build.yml/badge.svg" alt="Build Status"></a>
+  <a href="https://github.com/yuwanyuan/bangumi-lite/releases/latest"><img src="https://img.shields.io/github/v/release/yuwanyuan/bangumi-lite?color=blue&label=Release" alt="Release"></a>
   <img src="https://img.shields.io/badge/Platform-Android-green.svg" alt="Platform">
   <img src="https://img.shields.io/badge/Kotlin-2.0.21-purple.svg" alt="Kotlin">
   <img src="https://img.shields.io/badge/Compose-Material3-blue.svg" alt="Compose">
   <img src="https://img.shields.io/badge/MinSDK-26-orange.svg" alt="MinSDK">
-  <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License"></a>
 </p>
 
 <h1 align="center">BGM Lite</h1>
@@ -193,7 +195,11 @@ BGM Lite 使用三种数据源：
 
 ---
 
-## 🚀 构建与运行
+## 🚀 下载与构建
+
+### 下载 APK
+
+无需自行编译，直接前往 [GitHub Releases](https://github.com/yuwanyuan/bangumi-lite/releases/latest) 下载最新签名版 `app-release.apk`。开发版 APK 可在 [Actions](https://github.com/yuwanyuan/bangumi-lite/actions) 页面每次构建的 Artifacts 中获取。
 
 ### 环境要求
 
@@ -224,9 +230,10 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 app/build/outputs/apk/
 ├── debug/
-│   └── app-debug.apk          # Debug 版本
+│   └── app-debug.apk            # Debug 版本
 └── release/
-    └── app-release-unsigned.apk  # Release 版本（需签名）
+    └── app-release.apk          # Release 版本（CI 通过 Secrets 自动签名；
+                                  #   本地未配置签名环境变量时为 unsigned）
 ```
 
 ---
