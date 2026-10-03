@@ -1,15 +1,23 @@
 package com.bangumi.ywylite.ui.screen
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
@@ -74,6 +82,22 @@ fun SubjectDetailScreen(
     val scope = rememberCoroutineScope()
     var uiState by remember { mutableStateOf(SubjectDetailUiState()) }
     val token by app.settings.accessToken.collectAsState(initial = null)
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // 章节状态接口要求条目已收藏；未登录/未收藏时给出提示而不是静默失败
+    val ensureCanMark: suspend () -> Boolean = {
+        when {
+            token == null -> {
+                snackbarHostState.showSnackbar("登录后才能标记进度")
+                false
+            }
+            uiState.userCollection == null -> {
+                snackbarHostState.showSnackbar("收藏条目后才能标记进度")
+                false
+            }
+            else -> true
+        }
+    }
 
     LaunchedEffect(subjectId) {
         uiState = uiState.copy(loading = true, error = null)
@@ -188,8 +212,9 @@ fun SubjectDetailScreen(
                     } catch (_: Exception) {}
                 }
             },
-            onEpisodeClick = { episodeId ->
+            onToggleWatched = { episodeId ->
                 scope.launch {
+                    if (!ensureCanMark()) return@launch
                     try {
                         val isWatched = episodeId in uiState.watchedEpisodes
                         if (isWatched) {
@@ -199,9 +224,36 @@ fun SubjectDetailScreen(
                             app.api.updateEpisodeStatus(episodeId, 2)
                             uiState = uiState.copy(watchedEpisodes = uiState.watchedEpisodes + episodeId)
                         }
-                    } catch (_: Exception) {}
+                    } catch (_: Exception) {
+                        snackbarHostState.showSnackbar("标记失败，请重试")
+                    }
                 }
             },
+            onMarkWatchedUpTo = { episode ->
+                scope.launch {
+                    if (!ensureCanMark()) return@launch
+                    // legacy 接口按正篇序号记进度；多季度番 sort 可能不从 1 开始，取正篇内的位次
+                    val mainEps = uiState.episodes.filter { it.type == 0 }.sortedBy { it.sort }
+                    val index = mainEps.indexOfFirst { it.id == episode.id }
+                    val targetSort = if (index >= 0) index + 1 else episode.sort.toInt()
+                    val legacyOk = runCatching { app.api.markWatchedUpTo(subjectId, targetSort) }.isSuccess
+                    if (!legacyOk) {
+                        mainEps.take(index + 1).forEach { ep ->
+                            runCatching { app.api.updateEpisodeStatus(ep.id, 2) }
+                        }
+                    }
+                    runCatching { app.api.getEpisodeCollection(subjectId) }.getOrNull()?.let { list ->
+                        uiState = uiState.copy(
+                            watchedEpisodes = list.filter { it.type == 2 }.mapNotNull { it.episode?.id }.toSet()
+                        )
+                    }
+                    snackbarHostState.showSnackbar("已标记看到第 ${targetSort} 话")
+                }
+            },
+            getEpisodeComments = { episodeId ->
+                app.api.getEpisodeComments(episodeId)
+            },
+            snackbarHostState = snackbarHostState,
             onOpenWebView = onOpenWebView,
             onTagClick = onTagClick,
             onBack = onBack,
@@ -227,7 +279,10 @@ fun SubjectDetailScreen(
 private fun SubjectDetailContent(
     uiState: SubjectDetailUiState,
     onCollect: (Int, String?, Int?) -> Unit,
-    onEpisodeClick: (Int) -> Unit,
+    onToggleWatched: (Int) -> Unit,
+    onMarkWatchedUpTo: (Episode) -> Unit,
+    getEpisodeComments: suspend (Int) -> List<EpisodeComment>,
+    snackbarHostState: SnackbarHostState,
     onOpenWebView: (String, String) -> Unit,
     onTagClick: (String, Int) -> Unit,
     onBack: () -> Unit,
@@ -387,7 +442,9 @@ private fun SubjectDetailContent(
                     EpisodeBlockSection(
                         episodes = uiState.episodes,
                         watchedEpisodes = uiState.watchedEpisodes,
-                        onEpisodeClick = onEpisodeClick
+                        onToggleWatched = onToggleWatched,
+                        onMarkWatchedUpTo = onMarkWatchedUpTo,
+                        getEpisodeComments = getEpisodeComments
                     )
                 }
 
@@ -410,6 +467,11 @@ private fun SubjectDetailContent(
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
     }
 }
 
@@ -501,16 +563,20 @@ private fun CollapsibleSummary(summary: String) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun EpisodeBlockSection(
     episodes: List<Episode>,
     watchedEpisodes: Set<Int>,
-    onEpisodeClick: (Int) -> Unit
+    onToggleWatched: (Int) -> Unit,
+    onMarkWatchedUpTo: (Episode) -> Unit,
+    getEpisodeComments: suspend (Int) -> List<EpisodeComment>
 ) {
     val shouldFold = episodes.size > 12
     var expanded by remember { mutableStateOf(!shouldFold) }
     var selectedEpisodeId by remember { mutableIntStateOf(-1) }
+    var menuEpisode by remember { mutableStateOf<Episode?>(null) }
+    var commentEpisode by remember { mutableStateOf<Episode?>(null) }
 
     Column {
         Row(
@@ -550,14 +616,14 @@ private fun EpisodeBlockSection(
                             },
                             modifier = Modifier
                                 .defaultMinSize(minWidth = 44.dp, minHeight = 32.dp)
-                                .clickable {
-                                    if (selectedEpisodeId == episode.id) {
-                                        onEpisodeClick(episode.id)
-                                        selectedEpisodeId = -1
-                                    } else {
-                                        selectedEpisodeId = episode.id
-                                    }
-                                }
+                                .combinedClickable(
+                                    onClick = {
+                                        // 单击：展开/收起集名
+                                        selectedEpisodeId = if (selectedEpisodeId == episode.id) -1 else episode.id
+                                    },
+                                    onDoubleClick = { onToggleWatched(episode.id) },
+                                    onLongClick = { menuEpisode = episode }
+                                )
                         ) {
                             Box(
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -585,6 +651,189 @@ private fun EpisodeBlockSection(
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+
+    menuEpisode?.let { episode ->
+        ModalBottomSheet(onDismissRequest = { menuEpisode = null }) {
+            EpisodeActionSheet(
+                episode = episode,
+                isWatched = episode.id in watchedEpisodes,
+                onToggleWatched = {
+                    menuEpisode = null
+                    onToggleWatched(episode.id)
+                },
+                onWatchedUpTo = {
+                    menuEpisode = null
+                    onMarkWatchedUpTo(episode)
+                },
+                onComments = {
+                    menuEpisode = null
+                    commentEpisode = episode
+                }
+            )
+        }
+    }
+
+    commentEpisode?.let { episode ->
+        ModalBottomSheet(onDismissRequest = { commentEpisode = null }) {
+            EpisodeCommentsSheet(
+                episode = episode,
+                getComments = getEpisodeComments
+            )
+        }
+    }
+}
+
+@Composable
+private fun EpisodeActionSheet(
+    episode: Episode,
+    isWatched: Boolean,
+    onToggleWatched: () -> Unit,
+    onWatchedUpTo: () -> Unit,
+    onComments: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        Text(
+            text = buildString {
+                append("第 ${episode.ep ?: episode.sort.toInt()} 话")
+                val name = episode.nameCn.ifEmpty { episode.name }
+                if (name.isNotEmpty()) append("　$name")
+            },
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+        ListItem(
+            headlineContent = { Text(if (isWatched) "取消看过" else "看过") },
+            leadingContent = { Icon(Icons.Default.Done, contentDescription = null) },
+            modifier = Modifier.clickable(onClick = onToggleWatched)
+        )
+        ListItem(
+            headlineContent = { Text("看到第 ${episode.ep ?: episode.sort.toInt()} 话") },
+            supportingContent = { Text("本集及之前全部标为看过") },
+            leadingContent = { Icon(Icons.Default.FastForward, contentDescription = null) },
+            modifier = Modifier.clickable(onClick = onWatchedUpTo)
+        )
+        ListItem(
+            headlineContent = { Text(if (episode.comment > 0) "当集评论 (${episode.comment})" else "当集评论") },
+            leadingContent = { Icon(Icons.Default.Forum, contentDescription = null) },
+            modifier = Modifier.clickable(onClick = onComments)
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EpisodeCommentsSheet(
+    episode: Episode,
+    getComments: suspend (Int) -> List<EpisodeComment>
+) {
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var comments by remember { mutableStateOf<List<EpisodeComment>>(emptyList()) }
+    var retryKey by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(episode.id, retryKey) {
+        loading = true
+        error = null
+        runCatching { getComments(episode.id) }
+            .onSuccess { comments = it }
+            .onFailure { error = it.message ?: "加载失败" }
+        loading = false
+    }
+
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        Text(
+            text = buildString {
+                append("第 ${episode.ep ?: episode.sort.toInt()} 话 · 评论")
+                if (episode.comment > 0) append(" (${episode.comment})")
+            },
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+        when {
+            loading -> Box(
+                modifier = Modifier.fillMaxWidth().height(180.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+            error != null -> ErrorView(
+                message = error ?: "加载失败",
+                onRetry = { retryKey++ },
+                modifier = Modifier.height(180.dp)
+            )
+            comments.isEmpty() -> Box(
+                modifier = Modifier.fillMaxWidth().height(120.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("还没有评论", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            else -> LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 460.dp)
+                    .padding(horizontal = 16.dp)
+            ) {
+                items(comments, key = { it.id }) { comment ->
+                    EpisodeCommentRow(comment)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f))
+                }
+                item { Spacer(modifier = Modifier.height(8.dp)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpisodeCommentRow(comment: EpisodeComment) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        if (comment.avatar.isNotEmpty()) {
+            AsyncImage(
+                model = comment.avatar,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = comment.nickname,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Text(
+                    text = "#${comment.floor}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+                Text(
+                    text = comment.time,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+            if (comment.content.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                SelectionContainer {
+                    Text(comment.content, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }

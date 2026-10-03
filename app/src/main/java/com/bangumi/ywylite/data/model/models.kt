@@ -299,6 +299,17 @@ data class CommentResponse(
     val data: List<CommentItem>
 )
 
+/** 章节页（bgm.tv/ep/{id}）吐槽箱单条评论，由 HTML 解析得到 */
+data class EpisodeComment(
+    val id: Int = 0,
+    val username: String = "",
+    val nickname: String = "",
+    val avatar: String = "",
+    val floor: Int = 0,
+    val time: String = "",
+    val content: String = ""
+)
+
 @Serializable
 data class TrendingImages(
     val medium: String = "",

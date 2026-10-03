@@ -7,6 +7,7 @@ import io.ktor.client.engine.okhttp.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
+import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
@@ -275,6 +276,64 @@ class BangumiApi {
             contentType(ContentType.Application.Json)
             setBody(EpisodeStatusUpdate(type = type))
         }
+    }
+
+    /** 「看到第 eps 话」：把第 1..eps 话全部标为看过（legacy 接口，token 认证） */
+    suspend fun markWatchedUpTo(subjectId: Int, eps: Int) {
+        client.post("/subject/${subjectId}/update/watched_eps") {
+            withAuth()
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody(FormDataContent(parameters { append("watched_eps", eps.toString()) }))
+        }
+    }
+
+    /** 章节页（bgm.tv/ep/{id}）吐槽箱评论，HTML 解析，只取主楼 */
+    suspend fun getEpisodeComments(episodeId: Int): List<EpisodeComment> {
+        val response = webClient.get("/ep/${episodeId}")
+        return parseEpisodeCommentsFromHtml(response.bodyAsText())
+    }
+
+    private fun parseEpisodeCommentsFromHtml(html: String): List<EpisodeComment> {
+        val start = html.indexOf("<div id=\"comment_list\"")
+        if (start < 0) return emptyList()
+        val scope = html.substring(start)
+
+        val comments = mutableListOf<EpisodeComment>()
+        val mainRowRegex = Regex("""^\d+"[^>]*class="[^"]*row row_reply""")
+        val chunks = scope.split("<div id=\"post_").drop(1)
+        chunks.forEach { chunk ->
+            if (!mainRowRegex.containsMatchIn(chunk.take(300))) return@forEach
+
+            val id = chunk.substringBefore('"').toIntOrNull() ?: return@forEach
+            val username = Regex("""data-item-user="([^"]*)"""").find(chunk)?.groupValues?.get(1) ?: ""
+            val nickname = Regex("""<strong><a href="/user/[^"]*"[^>]*>([^<]+)</a>""").find(chunk)
+                ?.groupValues?.get(1)?.trim()?.ifEmpty { username } ?: username
+            val avatar = Regex("""background-image:url\('([^']+)'\)""").find(chunk)
+                ?.groupValues?.get(1)?.let { if (it.startsWith("//")) "https:$it" else it } ?: ""
+            val floorTime = Regex("""floor-anchor">#(\d+)</a>\s*-\s*([^<]+)""").find(chunk)
+            val floor = floorTime?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val time = floorTime?.groupValues?.get(2)?.trim() ?: ""
+            val content = Regex("""<div class="message[^"]*">([\s\S]*?)</div>""").find(chunk)
+                ?.groupValues?.get(1)?.let { htmlToText(it) } ?: ""
+
+            comments.add(EpisodeComment(id, username, nickname, avatar, floor, time, content))
+        }
+        return comments
+    }
+
+    private fun htmlToText(html: String): String {
+        return html
+            .replace(Regex("""<img[^>]*alt="([^"]*)"[^>]*>"""), "$1")
+            .replace(Regex("""<br\s*/?>"""), "\n")
+            .replace(Regex("""<[^>]+>"""), "")
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace(Regex("""\n{3,}"""), "\n\n")
+            .trim()
     }
 
     suspend fun browseByTag(
