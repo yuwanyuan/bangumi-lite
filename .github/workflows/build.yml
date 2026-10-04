@@ -85,7 +85,10 @@ jobs:
           prerelease: true
           overwrite_files: true
           body: |
-            master 分支自动构建的开发版，每次 push 覆盖更新（tag 位置不代表构建内容）。
+            master 分支自动构建的开发版，覆盖式更新（tag 位置不代表构建内容）。
+
+            连续 push 会合并：master 上最后一次 push 之后静默 MASTER_DEBOUNCE_SECONDS 秒才出包，
+            所以这里的构建可能比 master 最新提交晚几分钟，正常现象。
 
             稳定版请下载正式 Release（v* 标签）。
           files: app/build/outputs/apk/release/app-release.apk
