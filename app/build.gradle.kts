@@ -13,8 +13,12 @@ android {
         applicationId = "com.bangumi.ywylite"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // CI 约定：GITHUB_RUN_NUMBER 保证 versionCode 单调递增；tag 构建（v*）额外注入
+        // APP_VERSION_NAME 作为正式版本号，master 构建回落为 <base>-dev.<run>
+        val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+        val tagVersion = System.getenv("APP_VERSION_NAME")?.takeIf { it.isNotBlank() }?.removePrefix("v")
+        versionCode = runNumber ?: 2
+        versionName = tagVersion ?: "1.1.0-dev.${runNumber ?: 1}"
     }
 
     signingConfigs {
