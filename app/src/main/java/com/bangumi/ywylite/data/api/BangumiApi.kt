@@ -17,6 +17,7 @@ import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Route as OkRoute
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
 
@@ -70,6 +71,13 @@ class BangumiApi {
             }
             install(ContentNegotiation) {
                 json(json)
+            }
+            // 直连 bgm 链路偶发连接被对端中断，GET 幂等请求自动重试，避免偶发 connection closed 直接抛到界面
+            install(HttpRequestRetry) {
+                maxRetries = 2
+                retryOnExceptionIf { request, _ -> request.method == HttpMethod.Get }
+                retryIf { request, response -> request.method == HttpMethod.Get && response.status.value in 500..599 }
+                constantDelay(millis = 500)
             }
             install(DefaultRequest) {
                 url(baseUrl)
@@ -147,11 +155,14 @@ class BangumiApi {
             }
             contentType(ContentType.Application.Json)
             setBody(SearchRequest(keyword, sort, SearchFilter(type)))
+            withAuth()
         }.body()
     }
 
     suspend fun getSubject(id: Int): Subject {
-        return client.get("/v0/subjects/${id}").body()
+        return client.get("/v0/subjects/${id}") {
+            withAuth()
+        }.body()
     }
 
     suspend fun getEpisodes(
@@ -167,6 +178,7 @@ class BangumiApi {
                 parameters.append("offset", offset.toString())
                 parameters.append("limit", limit.toString())
             }
+            withAuth()
         }.body()
     }
 
@@ -248,7 +260,9 @@ class BangumiApi {
     }
 
     suspend fun getRelatedSubjects(subjectId: Int): List<RelatedSubject> {
-        return client.get("/v0/subjects/${subjectId}/related").body()
+        return client.get("/v0/subjects/${subjectId}/related") {
+            withAuth()
+        }.body()
     }
 
     suspend fun getEpisodeCollection(
@@ -518,6 +532,7 @@ class BangumiApi {
                 parameters.append("offset", offset.toString())
                 parameters.append("limit", limit.toString())
             }
+            withAuth()
         }.body()
     }
 

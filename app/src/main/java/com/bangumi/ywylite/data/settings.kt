@@ -9,6 +9,16 @@ import kotlinx.coroutines.flow.map
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "bangumi_settings")
 
+/** 代理配置快照，供启动时一次性恢复 */
+data class ProxySettings(
+    val enabled: Boolean = false,
+    val type: String = "HTTP",
+    val host: String = "",
+    val port: Int = 7890,
+    val username: String = "",
+    val password: String = ""
+)
+
 class Settings(private val context: Context) {
 
     val accessToken: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -41,6 +51,17 @@ class Settings(private val context: Context) {
 
     val proxyPassword: Flow<String> = context.dataStore.data.map { prefs ->
         prefs[PROXY_PASSWORD_KEY] ?: ""
+    }
+
+    val proxySettings: Flow<ProxySettings> = context.dataStore.data.map { prefs ->
+        ProxySettings(
+            enabled = prefs[PROXY_ENABLED_KEY] ?: false,
+            type = prefs[PROXY_TYPE_KEY] ?: "HTTP",
+            host = prefs[PROXY_HOST_KEY] ?: "",
+            port = prefs[PROXY_PORT_KEY] ?: 7890,
+            username = prefs[PROXY_USERNAME_KEY] ?: "",
+            password = prefs[PROXY_PASSWORD_KEY] ?: ""
+        )
     }
 
     val darkMode: Flow<String> = context.dataStore.data.map { prefs ->

@@ -29,6 +29,11 @@ class App : Application() {
             if (token != null) {
                 api.updateToken(token)
             }
+            // 代理配置只在设置页保存时生效过，重启后必须恢复，否则会一直走直连
+            val proxy = settings.proxySettings.first()
+            if (proxy.enabled) {
+                api.updateProxy(proxy.enabled, proxy.type, proxy.host, proxy.port, proxy.username, proxy.password)
+            }
         }
     }
 
