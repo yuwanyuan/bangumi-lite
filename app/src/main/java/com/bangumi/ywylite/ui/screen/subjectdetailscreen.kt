@@ -5,6 +5,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,12 +13,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
@@ -31,6 +35,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,10 +57,7 @@ data class SubjectDetailUiState(
     val userCollection: UserCollection? = null,
     val episodes: List<Episode> = emptyList(),
     val watchedEpisodes: Set<Int> = emptySet(),
-    val relatedSubjects: List<RelatedSubject> = emptyList(),
-    val comments: List<CommentItem> = emptyList(),
-    val commentOffset: Int = 0,
-    val commentHasMore: Boolean = false
+    val relatedSubjects: List<RelatedSubject> = emptyList()
 )
 
 val collectionTypeColors = mapOf(
@@ -107,7 +110,6 @@ fun SubjectDetailScreen(
             val subject = app.api.getSubject(subjectId)
             var episodes = emptyList<Episode>()
             var relatedSubjects = emptyList<RelatedSubject>()
-            var comments = emptyList<CommentItem>()
             var userCollection: UserCollection? = null
             var watchedEpisodes = emptySet<Int>()
 
@@ -115,11 +117,6 @@ fun SubjectDetailScreen(
             episodes = episodesResult.getOrDefault(emptyList())
             val relatedResult = runCatching { app.api.getRelatedSubjects(subjectId) }
             relatedSubjects = relatedResult.getOrDefault(emptyList())
-            val commentsResult = runCatching { app.api.getComments(subjectId, limit = 20) }
-            comments = commentsResult.getOrNull()?.data ?: emptyList()
-            val commentTotal = commentsResult.getOrNull()?.total ?: 0
-            val initialCommentOffset = comments.size
-            val initialCommentHasMore = initialCommentOffset < commentTotal
             if (token != null) {
                 val collectionResult = runCatching { app.api.getSubjectCollection(subjectId, token) }
                 userCollection = collectionResult.getOrNull()
@@ -135,9 +132,6 @@ fun SubjectDetailScreen(
                 subject = subject,
                 episodes = episodes,
                 relatedSubjects = relatedSubjects,
-                comments = comments,
-                commentOffset = initialCommentOffset,
-                commentHasMore = initialCommentHasMore,
                 userCollection = userCollection,
                 watchedEpisodes = watchedEpisodes
             )
@@ -189,20 +183,24 @@ fun SubjectDetailScreen(
         }
         uiState.subject != null -> SubjectDetailContent(
             uiState = uiState,
-            onCollect = { type, comment, rate ->
+            onCollect = { type, comment, rate, tags ->
                 scope.launch {
                     try {
-                        app.api.collectSubject(subjectId, type, rate = rate, comment = comment)
+                        app.api.collectSubject(subjectId, type, rate = rate, comment = comment, tags = tags)
                         if (type == 0) {
                             uiState = uiState.copy(userCollection = null)
                         } else {
                             uiState = uiState.copy(
-                                userCollection = uiState.userCollection?.copy(type = type)
+                                userCollection = uiState.userCollection?.copy(
+                                    type = type,
+                                    tags = tags ?: uiState.userCollection?.tags ?: emptyList()
+                                )
                                     ?: UserCollection(
                                         subject_id = subjectId,
                                         type = type,
                                         rate = rate ?: 0,
-                                        comment = comment ?: ""
+                                        comment = comment ?: "",
+                                        tags = tags ?: emptyList()
                                     )
                             )
                             val result = runCatching { app.api.getSubjectCollection(subjectId, token) }
@@ -256,20 +254,11 @@ fun SubjectDetailScreen(
                 app.api.getEpisodeComments(episodeId)
             },
             snackbarHostState = snackbarHostState,
+            getComments = { sid, offset, limit ->
+                app.api.getComments(sid, offset = offset, limit = limit)
+            },
             onTagClick = onTagClick,
-            onBack = onBack,
-            onLoadMoreComments = {
-                scope.launch {
-                    try {
-                        val result = app.api.getComments(subjectId, offset = uiState.commentOffset)
-                        uiState = uiState.copy(
-                            comments = uiState.comments + result.data,
-                            commentOffset = uiState.commentOffset + result.data.size,
-                            commentHasMore = (uiState.commentOffset + result.data.size) < result.total
-                        )
-                    } catch (_: Exception) {}
-                }
-            }
+            onBack = onBack
         )
         else -> EmptyView()
     }
@@ -279,14 +268,14 @@ fun SubjectDetailScreen(
 @Composable
 private fun SubjectDetailContent(
     uiState: SubjectDetailUiState,
-    onCollect: (Int, String?, Int?) -> Unit,
+    onCollect: (Int, String?, Int?, List<String>?) -> Unit,
     onToggleWatched: (Int) -> Unit,
     onMarkWatchedUpTo: (Episode) -> Unit,
     getEpisodeComments: suspend (Int) -> List<EpisodeComment>,
+    getComments: suspend (Int, Int, Int) -> CommentResponse,
     snackbarHostState: SnackbarHostState,
     onTagClick: (String, Int) -> Unit,
-    onBack: () -> Unit,
-    onLoadMoreComments: () -> Unit
+    onBack: () -> Unit
 ) {
     val subject = uiState.subject ?: return
     val context = LocalContext.current
@@ -295,6 +284,7 @@ private fun SubjectDetailContent(
         ?: subject.image.replace("http://", "https://")
 
     var showMenu by remember { mutableStateOf(false) }
+    var showCommentsSheet by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         AsyncImage(
@@ -424,19 +414,13 @@ private fun SubjectDetailContent(
                     currentType = uiState.userCollection?.type,
                     currentRate = uiState.userCollection?.rate ?: 0,
                     currentComment = uiState.userCollection?.comment ?: "",
+                    currentTags = uiState.userCollection?.tags ?: emptyList(),
+                    subjectTags = subject.tags.map { it.name },
                     onCollect = onCollect
                 )
 
                 if (subject.summary.isNotEmpty()) {
                     CollapsibleSummary(summary = subject.summary)
-                }
-
-                if (subject.tags.isNotEmpty()) {
-                    TagsSection(
-                        tags = subject.tags,
-                        subjectType = subject.type,
-                        onTagClick = onTagClick
-                    )
                 }
 
                 if (uiState.episodes.isNotEmpty()) {
@@ -449,22 +433,48 @@ private fun SubjectDetailContent(
                     )
                 }
 
+                if (subject.tags.isNotEmpty()) {
+                    TagsSection(
+                        tags = subject.tags,
+                        subjectType = subject.type,
+                        onTagClick = onTagClick
+                    )
+                }
+
                 if (uiState.relatedSubjects.isNotEmpty()) {
                     RelatedSection(relatedSubjects = uiState.relatedSubjects, onSubjectClick = {})
                 }
 
-                CommentSection(
-                    comments = uiState.comments,
-                    hasMore = uiState.commentHasMore,
-                    onLoadMore = onLoadMoreComments,
-                    onUserClick = { username ->
-                        if (username.isNotEmpty()) {
-                            openInBrowser(context, "https://bgm.tv/user/$username")
-                        }
-                    }
-                )
+                Spacer(modifier = Modifier.height(72.dp))
+            }
+        }
 
-                Spacer(modifier = Modifier.height(16.dp))
+        // 评论拉手：默认折叠在底部，点按向上展开评论弹层
+        Surface(
+            onClick = { showCommentsSheet = true },
+            shape = RoundedCornerShape(50),
+            shadowElevation = 6.dp,
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 20.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    Icons.Default.KeyboardArrowUp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = if (subject.comment > 0) "评论 (${subject.comment})" else "评论",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
         }
 
@@ -472,6 +482,20 @@ private fun SubjectDetailContent(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.BottomCenter)
         )
+    }
+
+    if (showCommentsSheet) {
+        ModalBottomSheet(onDismissRequest = { showCommentsSheet = false }) {
+            SubjectCommentsSheet(
+                subjectId = subject.id,
+                getComments = getComments,
+                onUserClick = { username ->
+                    if (username.isNotEmpty()) {
+                        openInBrowser(context, "https://bgm.tv/user/$username")
+                    }
+                }
+            )
+        }
     }
 }
 
@@ -483,9 +507,8 @@ private fun TagsSection(
     onTagClick: (String, Int) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val maxVisibleTags = 10
-    val shouldFold = tags.size > maxVisibleTags
-    val displayTags = if (expanded || !shouldFold) tags else tags.take(maxVisibleTags)
+    // 默认折叠为两行；超过约两行的数量才显示展开按钮
+    val canFold = tags.size > 8
 
     Column {
         Row(
@@ -494,7 +517,7 @@ private fun TagsSection(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("标签", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            if (shouldFold) {
+            if (canFold) {
                 Text(
                     text = if (expanded) "收起" else "展开",
                     style = MaterialTheme.typography.bodySmall,
@@ -505,10 +528,12 @@ private fun TagsSection(
         }
         Spacer(modifier = Modifier.height(6.dp))
         FlowRow(
+            maxLines = if (expanded) Int.MAX_VALUE else 2,
+            overflow = FlowRowOverflow.Clip,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            displayTags.forEach { tag ->
+            tags.forEach { tag ->
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
@@ -603,58 +628,41 @@ private fun EpisodeBlockSection(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 episodes.forEach { episode ->
-                    val isWatched = watchedEpisodes.contains(episode.id)
-                    val isSelected = selectedEpisodeId == episode.id
-
-                    Column {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = when {
-                                isWatched -> MaterialTheme.colorScheme.primary
-                                isSelected -> MaterialTheme.colorScheme.secondaryContainer
-                                else -> MaterialTheme.colorScheme.surfaceVariant
+                    EpisodeBlock(
+                        episode = episode,
+                        isWatched = episode.id in watchedEpisodes,
+                        isSelected = selectedEpisodeId == episode.id,
+                        onSelect = {
+                            // 单击：展开/收起集名
+                            selectedEpisodeId = if (selectedEpisodeId == episode.id) -1 else episode.id
+                        },
+                        onToggleWatched = { onToggleWatched(episode.id) },
+                        onLongPress = { menuEpisode = episode }
+                    )
+                }
+            }
+        } else if (shouldFold) {
+            // 折叠时保留一行不折叠：显示观看进度所在行；没有看过任何一集则显示第一行
+            BoxWithConstraints {
+                val perRow = (maxWidth / (44.dp + 6.dp)).toInt().coerceAtLeast(1)
+                val firstUnwatched = episodes.indexOfFirst { it.id !in watchedEpisodes }
+                val targetIdx = if (firstUnwatched >= 0) firstUnwatched else episodes.size - 1
+                val start = (targetIdx / perRow) * perRow
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    episodes.drop(start).take(perRow).forEach { episode ->
+                        EpisodeBlock(
+                            episode = episode,
+                            isWatched = episode.id in watchedEpisodes,
+                            isSelected = selectedEpisodeId == episode.id,
+                            onSelect = {
+                                selectedEpisodeId = if (selectedEpisodeId == episode.id) -1 else episode.id
                             },
-                            modifier = Modifier
-                                .defaultMinSize(minWidth = 44.dp, minHeight = 32.dp)
-                                .combinedClickable(
-                                    onClick = {
-                                        // 单击：展开/收起集名
-                                        selectedEpisodeId = if (selectedEpisodeId == episode.id) -1 else episode.id
-                                    },
-                                    onDoubleClick = { onToggleWatched(episode.id) },
-                                    onLongClick = { menuEpisode = episode }
-                                )
-                        ) {
-                            Box(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = episode.ep?.toString() ?: episode.sort.toInt().toString() ?: "?",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = when {
-                                        isWatched -> MaterialTheme.colorScheme.onPrimary
-                                        isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
-                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                    }
-                                )
-                            }
-                        }
-
-                        AnimatedVisibility(visible = isSelected) {
-                            Text(
-                                text = episode.nameCn.ifEmpty { episode.name },
-                                style = MaterialTheme.typography.labelSmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.layout { measurable, constraints ->
-                                    // 集名不参与 FlowRow 布局（占位 0 宽，避免把格子撑开出现空档），
-                                    // 从级数块左缘起绘、向右延伸至整行宽度
-                                    val placeable = measurable.measure(constraints.copy(minWidth = 0))
-                                    layout(0, placeable.height) { placeable.placeRelative(0, 0) }
-                                }
-                            )
-                        }
+                            onToggleWatched = { onToggleWatched(episode.id) },
+                            onLongPress = { menuEpisode = episode }
+                        )
                     }
                 }
             }
@@ -687,6 +695,65 @@ private fun EpisodeBlockSection(
             EpisodeCommentsSheet(
                 episode = episode,
                 getComments = getEpisodeComments
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun EpisodeBlock(
+    episode: Episode,
+    isWatched: Boolean,
+    isSelected: Boolean,
+    onSelect: () -> Unit,
+    onToggleWatched: () -> Unit,
+    onLongPress: () -> Unit
+) {
+    Column {
+        Surface(
+            shape = RoundedCornerShape(6.dp),
+            color = when {
+                isWatched -> MaterialTheme.colorScheme.primary
+                isSelected -> MaterialTheme.colorScheme.secondaryContainer
+                else -> MaterialTheme.colorScheme.surfaceVariant
+            },
+            modifier = Modifier
+                .defaultMinSize(minWidth = 44.dp, minHeight = 32.dp)
+                .combinedClickable(
+                    onClick = onSelect,
+                    onDoubleClick = onToggleWatched,
+                    onLongClick = onLongPress
+                )
+        ) {
+            Box(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = episode.ep?.toString() ?: episode.sort.toInt().toString(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = when {
+                        isWatched -> MaterialTheme.colorScheme.onPrimary
+                        isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+        }
+
+        AnimatedVisibility(visible = isSelected) {
+            Text(
+                text = episode.nameCn.ifEmpty { episode.name },
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.layout { measurable, constraints ->
+                    // 集名不参与 FlowRow 布局（占位 0 宽，避免把格子撑开出现空档），
+                    // 从级数块左缘起绘、向右延伸至整行宽度
+                    val placeable = measurable.measure(constraints.copy(minWidth = 0))
+                    layout(0, placeable.height) { placeable.placeRelative(0, 0) }
+                }
             )
         }
     }
@@ -863,28 +930,35 @@ private fun CollectionCountChip(label: String, count: Int, color: Color) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CollectionBar(
     currentType: Int?,
     currentRate: Int = 0,
     currentComment: String = "",
-    onCollect: (Int, String?, Int?) -> Unit
+    currentTags: List<String> = emptyList(),
+    subjectTags: List<String> = emptyList(),
+    onCollect: (Int, String?, Int?, List<String>?) -> Unit
 ) {
     var showDialog by remember { mutableStateOf(false) }
     var selectedType by remember { mutableIntStateOf(currentType ?: 3) }
     var comment by remember { mutableStateOf(currentComment) }
     var rating by remember { mutableIntStateOf(currentRate) }
+    var tagInput by remember { mutableStateOf(TextFieldValue("")) }
+    val selectedTags = remember { mutableStateListOf<String>() }
 
     val isCollected = currentType != null
     val currentColor = collectionTypeColors[currentType] ?: MaterialTheme.colorScheme.primary
     val currentLabel = collectionTypeLabels[currentType] ?: "收藏"
 
-    LaunchedEffect(currentType, currentRate, currentComment) {
+    LaunchedEffect(currentType, currentRate, currentComment, currentTags) {
         if (currentType != null) {
             selectedType = currentType
         }
         rating = currentRate
         comment = currentComment
+        selectedTags.clear()
+        selectedTags.addAll(currentTags)
     }
 
     if (isCollected) {
@@ -917,49 +991,101 @@ private fun CollectionBar(
             onDismissRequest = { showDialog = false },
             title = { Text("收藏与评分") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("收藏状态", style = MaterialTheme.typography.labelMedium)
-                    listOf(3 to "在看", 2 to "看过", 1 to "想看", 4 to "搁置", 5 to "抛弃").forEach { (type, label) ->
-                        val color = collectionTypeColors[type] ?: Color.Gray
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable { selectedType = type }
-                        ) {
-                            RadioButton(selected = selectedType == type, onClick = { selectedType = type }, colors = RadioButtonDefaults.colors(selectedColor = color))
-                            Text(label, color = if (selectedType == type) color else MaterialTheme.colorScheme.onSurface)
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("观看状态", style = MaterialTheme.typography.labelMedium)
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(3 to "在看", 2 to "看过", 1 to "想看", 4 to "搁置", 5 to "抛弃").forEach { (type, label) ->
+                            val color = collectionTypeColors[type] ?: Color.Gray
+                            FilterChip(
+                                selected = selectedType == type,
+                                onClick = { selectedType = type },
+                                label = { Text(label) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = color.copy(alpha = 0.18f),
+                                    selectedLabelColor = color
+                                )
+                            )
                         }
                     }
 
-                    Text("评分", style = MaterialTheme.typography.labelMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        (1..10).forEach { i ->
-                            OutlinedButton(
-                                onClick = { rating = if (rating == i) 0 else i },
-                                modifier = Modifier.size(32.dp),
-                                contentPadding = PaddingValues(0.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = if (rating >= i) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                                    contentColor = if (rating >= i) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    Text("我的标签", style = MaterialTheme.typography.labelMedium)
+                    if (subjectTags.isNotEmpty()) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            subjectTags.take(12).forEach { tag ->
+                                val selected = tag in selectedTags
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = {
+                                        if (selected) selectedTags.remove(tag) else selectedTags.add(tag)
+                                    },
+                                    label = { Text(tag) }
                                 )
-                            ) {
-                                Text("$i", fontSize = 10.sp)
                             }
                         }
                     }
+                    OutlinedTextField(
+                        value = tagInput,
+                        onValueChange = { tagInput = it },
+                        label = { Text("自定义标签（回车添加）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            val t = tagInput.text.trim()
+                            if (t.isNotEmpty() && selectedTags.none { it.equals(t, ignoreCase = true) }) {
+                                selectedTags.add(t)
+                            }
+                            tagInput = TextFieldValue("")
+                        })
+                    )
+                    if (selectedTags.isNotEmpty()) {
+                        Text(
+                            "已选：${selectedTags.joinToString("、")}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
 
+                    Text("吐槽（我的评论）", style = MaterialTheme.typography.labelMedium)
                     OutlinedTextField(
                         value = comment,
                         onValueChange = { comment = it },
-                        label = { Text("评论（可选）") },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 2,
                         maxLines = 4
+                    )
+
+                    Text(
+                        "评分 ★${rating.coerceIn(1, 10)} / 10",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    Slider(
+                        value = rating.coerceIn(1, 10).toFloat(),
+                        onValueChange = { rating = it.toInt() },
+                        valueRange = 1f..10f,
+                        steps = 8
                     )
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    onCollect(selectedType, comment.ifBlank { null }, if (rating > 0) rating else null)
+                    onCollect(
+                        selectedType,
+                        comment.ifBlank { null },
+                        rating.coerceIn(1, 10),
+                        selectedTags.toList().ifEmpty { null }
+                    )
                     showDialog = false
                 }) { Text("确定") }
             },
@@ -967,7 +1093,7 @@ private fun CollectionBar(
                 Row {
                     if (isCollected) {
                         TextButton(onClick = {
-                            onCollect(0, null, null)
+                            onCollect(0, null, null, null)
                             showDialog = false
                         }) { Text("取消收藏", color = Color(0xFFF44336)) }
                     }
@@ -1003,68 +1129,156 @@ private fun RelatedSection(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CommentSection(
-    comments: List<CommentItem>,
-    hasMore: Boolean,
-    onLoadMore: () -> Unit,
-    onUserClick: (String) -> Unit = {}
+private fun SubjectCommentsSheet(
+    subjectId: Int,
+    getComments: suspend (Int, Int, Int) -> CommentResponse,
+    onUserClick: (String) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("评论 (${comments.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+    val scope = rememberCoroutineScope()
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var comments by remember { mutableStateOf<List<CommentItem>>(emptyList()) }
+    var offset by remember { mutableIntStateOf(0) }
+    var total by remember { mutableIntStateOf(0) }
+    var loadingMore by remember { mutableStateOf(false) }
+    var retryKey by remember { mutableIntStateOf(0) }
 
-        comments.forEach { comment ->
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                ),
-                shape = RoundedCornerShape(8.dp)
+    LaunchedEffect(subjectId, retryKey) {
+        loading = true
+        error = null
+        runCatching { getComments(subjectId, 0, 20) }
+            .onSuccess { result ->
+                comments = result.data
+                offset = result.data.size
+                total = result.total
+            }
+            .onFailure { error = it.message ?: "加载失败" }
+        loading = false
+    }
+
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        Text(
+            "条目评论",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+        when {
+            loading -> Box(
+                modifier = Modifier.fillMaxWidth().height(180.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Column(modifier = Modifier.padding(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        val avatarUrl = comment.user?.avatar?.medium?.replace("http://", "https://") ?: ""
-                        if (avatarUrl.isNotEmpty()) {
-                            AsyncImage(
-                                model = avatarUrl,
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .clip(RoundedCornerShape(12.dp)),
-                                contentScale = ContentScale.Crop
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                        }
-                        Text(
-                            text = comment.user?.nickname ?: "",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.clickable {
-                                val username = comment.user?.username ?: ""
-                                if (username.isNotEmpty()) {
-                                    onUserClick(username)
+                CircularProgressIndicator()
+            }
+            error != null -> ErrorView(
+                message = error ?: "加载失败",
+                onRetry = { retryKey++ },
+                modifier = Modifier.height(180.dp)
+            )
+            comments.isEmpty() -> Box(
+                modifier = Modifier.fillMaxWidth().height(120.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("还没有评论", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            else -> LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 480.dp)
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(comments, key = { it.id }) { comment ->
+                    SubjectCommentCard(comment = comment, onUserClick = onUserClick)
+                }
+                if (offset < total) {
+                    item {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (loadingMore) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            } else {
+                                TextButton(onClick = {
+                                    if (loadingMore) return@TextButton
+                                    scope.launch {
+                                        loadingMore = true
+                                        runCatching { getComments(subjectId, offset, 20) }
+                                            .onSuccess { result ->
+                                                comments = comments + result.data
+                                                offset += result.data.size
+                                                total = result.total
+                                            }
+                                        loadingMore = false
+                                    }
+                                }) {
+                                    Text("加载更多评论")
                                 }
                             }
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        if (comment.rate > 0) {
-                            Text("★${comment.rate}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                    if (comment.comment.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        SelectionContainer {
-                            Text(comment.comment, style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
+                item { Spacer(modifier = Modifier.height(8.dp)) }
             }
         }
+    }
+}
 
-        if (hasMore) {
-            TextButton(onClick = onLoadMore, modifier = Modifier.align(Alignment.CenterHorizontally)) {
-                Text("加载更多评论")
+@Composable
+private fun SubjectCommentCard(
+    comment: CommentItem,
+    onUserClick: (String) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val avatarUrl = comment.user?.avatar?.medium?.replace("http://", "https://") ?: ""
+                if (avatarUrl.isNotEmpty()) {
+                    AsyncImage(
+                        model = avatarUrl,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Text(
+                    text = comment.user?.nickname ?: "",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .clickable {
+                            val username = comment.user?.username ?: ""
+                            if (username.isNotEmpty()) {
+                                onUserClick(username)
+                            }
+                        }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                if (comment.rate > 0) {
+                    Text("★${comment.rate}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            if (comment.comment.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                SelectionContainer {
+                    Text(comment.comment, style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
     }

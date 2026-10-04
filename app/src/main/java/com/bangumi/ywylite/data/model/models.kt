@@ -112,7 +112,8 @@ data class Subject(
     val airDate: String = "",
     @SerialName("total_episodes")
     val totalEpisodes: Int = 0,
-    val collection: CollectionCount? = null
+    val collection: CollectionCount? = null,
+    val comment: Int = 0
 )
 
 @Serializable
@@ -226,7 +227,8 @@ data class CollectionModifyPayload(
     val type: Int? = null,
     val comment: String? = null,
     val rate: Int? = null,
-    val privacy: Boolean? = null
+    val privacy: Boolean? = null,
+    val tags: List<String>? = null
 )
 
 @Serializable

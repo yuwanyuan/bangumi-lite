@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,6 +42,9 @@ data class ProfileUiState(
     val loading: Boolean = false,
     val error: String? = null,
     val timeline: List<TimelineItem> = emptyList(),
+    val timelinePage: Int = 1,
+    val timelineHasMore: Boolean = false,
+    val timelineLoadingMore: Boolean = false,
     val timelineLoading: Boolean = false,
     val timelineError: String? = null
 )
@@ -99,7 +103,12 @@ fun ProfileScreen(
             uiState = uiState.copy(timelineLoading = true, timelineError = null)
             try {
                 val timeline = app.api.getUserTimeline(username)
-                uiState = uiState.copy(timelineLoading = false, timeline = timeline)
+                uiState = uiState.copy(
+                    timelineLoading = false,
+                    timeline = timeline,
+                    timelinePage = 1,
+                    timelineHasMore = timeline.isNotEmpty()
+                )
             } catch (e: Exception) {
                 uiState = uiState.copy(timelineLoading = false, timelineError = e.message)
             }
@@ -206,6 +215,53 @@ fun ProfileScreen(
                                 isLast = index == uiState.timeline.size - 1,
                                 onSubjectClick = onSubjectClick
                             )
+                        }
+                        if (uiState.timelineHasMore) {
+                            item(key = "timeline_load_more") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (uiState.timelineLoadingMore) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        // 滑到底后出现的小箭头，点一下加载下一页
+                                        IconButton(
+                                            onClick = {
+                                                val username = uiState.user?.username ?: return@IconButton
+                                                scope.launch {
+                                                    if (uiState.timelineLoadingMore || !uiState.timelineHasMore) return@launch
+                                                    uiState = uiState.copy(timelineLoadingMore = true)
+                                                    try {
+                                                        val next = app.api.getUserTimeline(username, page = uiState.timelinePage + 1)
+                                                        val existingIds = uiState.timeline.map { it.id }.toSet()
+                                                        val fresh = next.filter { it.id !in existingIds }
+                                                        uiState = if (fresh.isEmpty()) {
+                                                            uiState.copy(timelineLoadingMore = false, timelineHasMore = false)
+                                                        } else {
+                                                            uiState.copy(
+                                                                timeline = uiState.timeline + fresh,
+                                                                timelinePage = uiState.timelinePage + 1,
+                                                                timelineLoadingMore = false
+                                                            )
+                                                        }
+                                                    } catch (_: Exception) {
+                                                        uiState = uiState.copy(timelineLoadingMore = false)
+                                                    }
+                                                }
+                                            }
+                                        ) {
+                                            Icon(
+                                                Icons.Default.KeyboardArrowDown,
+                                                contentDescription = "加载更多时间线",
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

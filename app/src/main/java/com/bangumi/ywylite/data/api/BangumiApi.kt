@@ -47,9 +47,12 @@ class BangumiApi {
     private var currentProxyUsername = ""
     private var currentProxyPassword = ""
 
-    private var _client: HttpClient = createClient("https://api.bgm.tv")
+    // 官方 API 与 Web 端域名，可由设置切换（见 updateApiHost）
+    private var apiBaseUrl = "https://api.bgm.tv"
+    private var webBaseUrl = "https://bgm.tv"
+    private var _client: HttpClient = createClient(apiBaseUrl)
     private var _nextClient: HttpClient = createClient("https://next.bgm.tv")
-    private var _webClient: HttpClient = createClient("https://bgm.tv")
+    private var _webClient: HttpClient = createClient(webBaseUrl)
 
     val client: HttpClient get() = _client
     val nextClient: HttpClient get() = _nextClient
@@ -119,12 +122,27 @@ class BangumiApi {
         currentProxyPort = port
         currentProxyUsername = username
         currentProxyPassword = password
+        rebuildClients()
+    }
+
+    /**
+     * 切换官方 API / Web 端域名并全局重建客户端（保留当前代理配置）。
+     * 空白值表示不修改对应域名。
+     */
+    fun updateApiHost(apiHost: String? = null, webHost: String? = null) {
+        var changed = false
+        apiHost?.takeIf { it.isNotBlank() && it != apiBaseUrl }?.let { apiBaseUrl = it; changed = true }
+        webHost?.takeIf { it.isNotBlank() && it != webBaseUrl }?.let { webBaseUrl = it; changed = true }
+        if (changed) rebuildClients()
+    }
+
+    private fun rebuildClients() {
         _client.close()
         _nextClient.close()
         _webClient.close()
-        _client = createClient("https://api.bgm.tv")
+        _client = createClient(apiBaseUrl)
         _nextClient = createClient("https://next.bgm.tv")
-        _webClient = createClient("https://bgm.tv")
+        _webClient = createClient(webBaseUrl)
     }
 
     fun updateToken(token: String?) {
@@ -210,7 +228,8 @@ class BangumiApi {
         subjectId: Int,
         type: Int,
         rate: Int? = null,
-        comment: String? = null
+        comment: String? = null,
+        tags: List<String>? = null
     ) {
         if (type == 0) {
             client.delete("/v0/users/-/collections/${subjectId}") {
@@ -220,7 +239,7 @@ class BangumiApi {
             client.post("/v0/users/-/collections/${subjectId}") {
                 withAuth()
                 contentType(ContentType.Application.Json)
-                setBody(CollectionModifyPayload(type = type, comment = comment, rate = rate))
+                setBody(CollectionModifyPayload(type = type, comment = comment, rate = rate, tags = tags))
             }
         }
     }

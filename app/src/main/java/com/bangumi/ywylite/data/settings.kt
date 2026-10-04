@@ -53,6 +53,16 @@ class Settings(private val context: Context) {
         prefs[PROXY_PASSWORD_KEY] ?: ""
     }
 
+    /** API 域名（空白 = 默认 https://api.bgm.tv） */
+    val apiHost: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[API_HOST_KEY] ?: ""
+    }
+
+    /** Web 端域名（空白 = 默认 https://bgm.tv） */
+    val webHost: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[WEB_HOST_KEY] ?: ""
+    }
+
     val proxySettings: Flow<ProxySettings> = context.dataStore.data.map { prefs ->
         ProxySettings(
             enabled = prefs[PROXY_ENABLED_KEY] ?: false,
@@ -123,6 +133,18 @@ class Settings(private val context: Context) {
         }
     }
 
+    suspend fun saveApiHost(host: String) {
+        context.dataStore.edit { prefs ->
+            prefs[API_HOST_KEY] = host
+        }
+    }
+
+    suspend fun saveWebHost(host: String) {
+        context.dataStore.edit { prefs ->
+            prefs[WEB_HOST_KEY] = host
+        }
+    }
+
     suspend fun saveDarkMode(mode: String) {
         context.dataStore.edit { prefs ->
             prefs[DARK_MODE_KEY] = mode
@@ -136,8 +158,10 @@ class Settings(private val context: Context) {
         private val PROXY_TYPE_KEY = stringPreferencesKey("proxy_type")
         private val PROXY_HOST_KEY = stringPreferencesKey("proxy_host")
         private val PROXY_PORT_KEY = intPreferencesKey("proxy_port")
-        private val PROXY_USERNAME_KEY = stringPreferencesKey("proxy_username")
-        private val PROXY_PASSWORD_KEY = stringPreferencesKey("proxy_password")
-        private val DARK_MODE_KEY = stringPreferencesKey("dark_mode")
+    private val PROXY_USERNAME_KEY = stringPreferencesKey("proxy_username")
+    private val PROXY_PASSWORD_KEY = stringPreferencesKey("proxy_password")
+    private val API_HOST_KEY = stringPreferencesKey("api_host")
+    private val WEB_HOST_KEY = stringPreferencesKey("web_host")
+    private val DARK_MODE_KEY = stringPreferencesKey("dark_mode")
     }
 }

@@ -29,6 +29,21 @@ fun SettingsScreen(
     val darkMode by app.settings.darkMode.collectAsState(initial = "system")
     var showDarkModeDialog by remember { mutableStateOf(false) }
 
+    // 官方 API / Web 端域名切换
+    val apiHosts = listOf(
+        "https://api.bgm.tv" to "api.bgm.tv（默认）",
+        "https://api.bgmapi.com" to "api.bgmapi.com（备用）"
+    )
+    val webHosts = listOf(
+        "https://bgm.tv" to "bgm.tv（默认）",
+        "https://bangumi.tv" to "bangumi.tv（备用）",
+        "https://chii.in" to "chii.in（备用）"
+    )
+    val apiHost by app.settings.apiHost.collectAsState(initial = "")
+    val webHost by app.settings.webHost.collectAsState(initial = "")
+    var showApiHostDialog by remember { mutableStateOf(false) }
+    var showWebHostDialog by remember { mutableStateOf(false) }
+
     if (showDarkModeDialog) {
         AlertDialog(
             onDismissRequest = { showDarkModeDialog = false },
@@ -61,6 +76,90 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showDarkModeDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showApiHostDialog) {
+        AlertDialog(
+            onDismissRequest = { showApiHostDialog = false },
+            title = { Text("API 地址") },
+            text = {
+                Column {
+                    apiHosts.forEach { (value, label) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch {
+                                        app.settings.saveApiHost(value)
+                                        app.api.updateApiHost(apiHost = value)
+                                    }
+                                    showApiHostDialog = false
+                                }
+                                .padding(vertical = 8.dp)
+                        ) {
+                            RadioButton(
+                                selected = apiHost == value,
+                                onClick = {
+                                    scope.launch {
+                                        app.settings.saveApiHost(value)
+                                        app.api.updateApiHost(apiHost = value)
+                                    }
+                                    showApiHostDialog = false
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(label)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showApiHostDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showWebHostDialog) {
+        AlertDialog(
+            onDismissRequest = { showWebHostDialog = false },
+            title = { Text("Web 端地址") },
+            text = {
+                Column {
+                    webHosts.forEach { (value, label) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch {
+                                        app.settings.saveWebHost(value)
+                                        app.api.updateApiHost(webHost = value)
+                                    }
+                                    showWebHostDialog = false
+                                }
+                                .padding(vertical = 8.dp)
+                        ) {
+                            RadioButton(
+                                selected = webHost == value,
+                                onClick = {
+                                    scope.launch {
+                                        app.settings.saveWebHost(value)
+                                        app.api.updateApiHost(webHost = value)
+                                    }
+                                    showWebHostDialog = false
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(label)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showWebHostDialog = false }) { Text("取消") }
             }
         )
     }
@@ -108,6 +207,18 @@ fun SettingsScreen(
             }
 
             SettingsSection(title = "网络") {
+                SettingsItem(
+                    icon = Icons.Default.Dns,
+                    title = "API 地址",
+                    subtitle = apiHosts.firstOrNull { it.first == apiHost }?.second ?: "api.bgm.tv（默认）",
+                    onClick = { showApiHostDialog = true }
+                )
+                SettingsItem(
+                    icon = Icons.Default.Language,
+                    title = "Web 端地址",
+                    subtitle = webHosts.firstOrNull { it.first == webHost }?.second ?: "bgm.tv（默认）",
+                    onClick = { showWebHostDialog = true }
+                )
                 SettingsItem(
                     icon = Icons.Default.VpnLock,
                     title = "代理设置",
