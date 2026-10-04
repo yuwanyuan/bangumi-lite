@@ -83,7 +83,7 @@ fun BangumiLoginPanel(onLoginSuccess: (User) -> Unit) {
                 Text("前往 Bangumi 获取 Access Token")
             }
             Text(
-                "在浏览器中生成 Token 后复制粘贴到下方；此方式有效期 7 天，过期需手动更换",
+                "在浏览器中生成 Token 后复制粘贴到下方；此方式登录最多可保持 365 天，过期后需重新生成",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -116,7 +116,7 @@ fun BangumiLoginPanel(onLoginSuccess: (User) -> Unit) {
             ) {
                 Box(
                     modifier = Modifier
-                        .height(44.dp)
+                        .height(72.dp)
                         .clickable { captchaKey++ },
                     contentAlignment = Alignment.Center
                 ) {
@@ -125,17 +125,21 @@ fun BangumiLoginPanel(onLoginSuccess: (User) -> Unit) {
                         Image(
                             bitmap = img,
                             contentDescription = "验证码，点击刷新",
-                            modifier = Modifier.height(40.dp)
+                            modifier = Modifier
+                                .height(68.dp)
+                                .fillMaxWidth(0.6f)
                         )
                     } else {
                         CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
                     }
                 }
-                Text(
-                    "看不清？点击图片刷新",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column {
+                    Text(
+                        "看不清？点击图片刷新",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             OutlinedTextField(
                 value = captcha,

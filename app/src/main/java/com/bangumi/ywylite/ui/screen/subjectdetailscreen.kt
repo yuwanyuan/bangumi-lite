@@ -47,6 +47,7 @@ import com.bangumi.ywylite.ui.component.ErrorView
 import com.bangumi.ywylite.ui.component.LoadingView
 import com.bangumi.ywylite.ui.component.UserAges
 import com.bangumi.ywylite.ui.component.openInBrowser
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 data class SubjectDetailUiState(
@@ -128,7 +129,12 @@ fun SubjectDetailScreen(
             return@LaunchedEffect
         }
         try {
-            val collection = runCatching { app.api.getSubjectCollection(subjectId, token) }.getOrNull()
+            // 首次失败自动重试一次，避免瞬时网络问题导致收藏状态显示成未收藏
+            var collection = runCatching { app.api.getSubjectCollection(subjectId, token) }.getOrNull()
+            if (collection == null) {
+                delay(800)
+                collection = runCatching { app.api.getSubjectCollection(subjectId, token) }.getOrNull()
+            }
             if (collection != null) {
                 uiState = uiState.copy(userCollection = collection)
             }
@@ -954,8 +960,12 @@ private fun CollectionBar(
     var newTagText by remember { mutableStateOf(TextFieldValue("")) }
 
     val openDialog = {
-        // 打开时与已获取的收藏状态对齐
+        // 打开时与已获取的收藏状态全量对齐：状态、评分、吐槽、标签一并回显
         currentType?.let { selectedType = it }
+        rating = currentRate
+        comment = currentComment
+        selectedTags.clear()
+        selectedTags.addAll(currentTags)
         showDialog = true
     }
 

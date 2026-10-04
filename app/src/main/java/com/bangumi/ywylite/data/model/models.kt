@@ -144,7 +144,7 @@ data class PagedSubject(
     val total: Int = 0,
     val offset: Int = 0,
     val limit: Int = 0,
-    val data: List<SubjectSmall>
+    val data: List<SubjectSmall> = emptyList()
 )
 
 @Serializable
@@ -152,7 +152,7 @@ data class PagedUserCollection(
     val total: Int = 0,
     val offset: Int = 0,
     val limit: Int = 0,
-    val data: List<UserCollection>
+    val data: List<UserCollection> = emptyList()
 )
 
 @Serializable
@@ -175,7 +175,7 @@ data class PagedEpisode(
     val total: Int = 0,
     val offset: Int = 0,
     val limit: Int = 0,
-    val data: List<Episode>
+    val data: List<Episode> = emptyList()
 )
 
 @Serializable
@@ -308,7 +308,7 @@ data class CommentResponse(
     val total: Int = 0,
     val offset: Int = 0,
     val limit: Int = 0,
-    val data: List<CommentItem>
+    val data: List<CommentItem> = emptyList()
 )
 
 /** 章节页（bgm.tv/ep/{id}）吐槽箱单条评论，由 HTML 解析得到 */

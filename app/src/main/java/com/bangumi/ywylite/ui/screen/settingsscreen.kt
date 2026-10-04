@@ -1,8 +1,10 @@
 ﻿package com.bangumi.ywylite.ui.screen
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -11,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
@@ -43,6 +46,23 @@ fun SettingsScreen(
     val webHost by app.settings.webHost.collectAsState(initial = "")
     var showApiHostDialog by remember { mutableStateOf(false) }
     var showWebHostDialog by remember { mutableStateOf(false) }
+    // 地址连通性测试结果：null 测试中 / true 通（绿）/ false 不通（红）
+    var pingResults by remember { mutableStateOf<Map<String, Boolean?>>(emptyMap()) }
+
+    LaunchedEffect(showApiHostDialog, showWebHostDialog) {
+        val targets = buildList {
+            if (showApiHostDialog) addAll(apiHosts.map { it.first })
+            if (showWebHostDialog) addAll(webHosts.map { it.first })
+        }
+        if (targets.isEmpty()) return@LaunchedEffect
+        pingResults = targets.associateWith { null }
+        targets.forEach { url ->
+            scope.launch {
+                val ok = runCatching { app.api.pingHost(url) }.getOrDefault(false)
+                pingResults = pingResults + (url to ok)
+            }
+        }
+    }
 
     if (showDarkModeDialog) {
         AlertDialog(
@@ -87,32 +107,18 @@ fun SettingsScreen(
             text = {
                 Column {
                     apiHosts.forEach { (value, label) ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    scope.launch {
-                                        app.settings.saveApiHost(value)
-                                        app.api.updateApiHost(apiHost = value)
-                                    }
-                                    showApiHostDialog = false
+                        HostOptionRow(
+                            label = label,
+                            selected = apiHost == value,
+                            pingState = pingResults[value],
+                            onSelect = {
+                                scope.launch {
+                                    app.settings.saveApiHost(value)
+                                    app.api.updateApiHost(apiHost = value)
                                 }
-                                .padding(vertical = 8.dp)
-                        ) {
-                            RadioButton(
-                                selected = apiHost == value,
-                                onClick = {
-                                    scope.launch {
-                                        app.settings.saveApiHost(value)
-                                        app.api.updateApiHost(apiHost = value)
-                                    }
-                                    showApiHostDialog = false
-                                }
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(label)
-                        }
+                                showApiHostDialog = false
+                            }
+                        )
                     }
                 }
             },
@@ -129,32 +135,18 @@ fun SettingsScreen(
             text = {
                 Column {
                     webHosts.forEach { (value, label) ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    scope.launch {
-                                        app.settings.saveWebHost(value)
-                                        app.api.updateApiHost(webHost = value)
-                                    }
-                                    showWebHostDialog = false
+                        HostOptionRow(
+                            label = label,
+                            selected = webHost == value,
+                            pingState = pingResults[value],
+                            onSelect = {
+                                scope.launch {
+                                    app.settings.saveWebHost(value)
+                                    app.api.updateApiHost(webHost = value)
                                 }
-                                .padding(vertical = 8.dp)
-                        ) {
-                            RadioButton(
-                                selected = webHost == value,
-                                onClick = {
-                                    scope.launch {
-                                        app.settings.saveWebHost(value)
-                                        app.api.updateApiHost(webHost = value)
-                                    }
-                                    showWebHostDialog = false
-                                }
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(label)
-                        }
+                                showWebHostDialog = false
+                            }
+                        )
                     }
                 }
             },
@@ -268,4 +260,45 @@ private fun SettingsItem(
         },
         modifier = Modifier.clickable(onClick = onClick)
     )
+}
+
+/** 地址选择行：单选 + 连通性状态（绿通 / 红不通 / 灰测试中） */
+@Composable
+private fun HostOptionRow(
+    label: String,
+    selected: Boolean,
+    pingState: Boolean?,
+    onSelect: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSelect)
+            .padding(vertical = 8.dp)
+    ) {
+        RadioButton(selected = selected, onClick = onSelect)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(label, modifier = Modifier.weight(1f))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            val (color, text) = when (pingState) {
+                true -> Color(0xFF4CAF50) to "通"
+                false -> Color(0xFFF44336) to "不通"
+                null -> MaterialTheme.colorScheme.outline to "测试中"
+            }
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(color, CircleShape)
+            )
+            Text(
+                text,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 }

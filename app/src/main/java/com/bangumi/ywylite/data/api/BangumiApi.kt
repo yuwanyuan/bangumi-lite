@@ -11,6 +11,7 @@ import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import okhttp3.Authenticator
 import okhttp3.Cookie
@@ -182,6 +183,16 @@ class BangumiApi {
 
     fun updateToken(token: String?) {
         accessToken = token
+    }
+
+    /**
+     * 连通性测试：向目标域名发一个短超时 GET，服务端有任何 HTTP 响应（含 4xx）即视为通。
+     * 用于设置页 API / Web 地址的绿/红状态显示。
+     */
+    suspend fun pingHost(url: String): Boolean = withTimeout(6000) {
+        runCatching {
+            webClient.get(url).status.value < 500
+        }.getOrDefault(false)
     }
 
     // ------------------------------------------------------------------
