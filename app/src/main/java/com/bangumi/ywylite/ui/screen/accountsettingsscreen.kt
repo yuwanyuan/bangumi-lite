@@ -8,10 +8,15 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.Settings
+import com.bangumi.ywylite.ui.component.openInBrowser
 import kotlinx.coroutines.launch
+
+/** Bangumi 官方个人访问令牌创建页 */
+private const val TOKEN_URL = "https://next.bgm.tv/demo/access-token"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -102,6 +107,19 @@ fun AccountSettingsScreen(
                     label = { Text("Access Token") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
+                )
+
+                val context = LocalContext.current
+                TextButton(
+                    onClick = { openInBrowser(context, TOKEN_URL) },
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)
+                ) {
+                    Text("获取 Access Token ↗", color = MaterialTheme.colorScheme.primary)
+                }
+                Text(
+                    "点击上方链接在浏览器中登录 Bangumi，创建个人访问令牌后复制粘贴到上方输入框。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 if (error.isNotEmpty()) {
