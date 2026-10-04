@@ -51,6 +51,18 @@ class BangumiApi {
     private var currentProxyUsername = ""
     private var currentProxyPassword = ""
 
+    // Web 端会话 Cookie（登录流程用，进程内保存）。
+    // 注意：必须声明在 _webClient/_oauthClient 之前——字段初始化时 createClient 会引用它们
+    private val webCookieStore = ConcurrentHashMap<String, Cookie>()
+    private val webCookieJar = object : CookieJar {
+        override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+            cookies.forEach { c -> webCookieStore["${c.domain}|${c.name}"] = c }
+        }
+
+        override fun loadForRequest(url: HttpUrl): List<Cookie> =
+            webCookieStore.values.filter { it.matches(url) }.toList()
+    }
+
     // 官方 API 与 Web 端域名，可由设置切换（见 updateApiHost）
     private var apiBaseUrl = "https://api.bgm.tv"
     private var webBaseUrl = "https://bgm.tv"
@@ -68,17 +80,6 @@ class BangumiApi {
     private val oauthAppId = "bgm72386ac2893460ce3"
     private val oauthAppSecret = "fbb6ceba1289a8854d3a88af87ac6dfd"
     private val oauthRedirectUri = "https://bgm.tv/dev/app"
-
-    // Web 端会话 Cookie（登录流程用，进程内保存）
-    private val webCookieStore = ConcurrentHashMap<String, Cookie>()
-    private val webCookieJar = object : CookieJar {
-        override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
-            cookies.forEach { c -> webCookieStore["${c.domain}|${c.name}"] = c }
-        }
-
-        override fun loadForRequest(url: HttpUrl): List<Cookie> =
-            webCookieStore.values.filter { it.matches(url) }.toList()
-    }
 
     private fun createClient(
         baseUrl: String,
