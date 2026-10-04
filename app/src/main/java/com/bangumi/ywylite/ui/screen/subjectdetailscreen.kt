@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -646,7 +647,12 @@ private fun EpisodeBlockSection(
                                 style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 120.dp)
+                                modifier = Modifier.layout { measurable, constraints ->
+                                    // 集名不参与 FlowRow 布局（占位 0 宽，避免把格子撑开出现空档），
+                                    // 从级数块左缘起绘、向右延伸至整行宽度
+                                    val placeable = measurable.measure(constraints.copy(minWidth = 0))
+                                    layout(0, placeable.height) { placeable.placeRelative(0, 0) }
+                                }
                             )
                         }
                     }
