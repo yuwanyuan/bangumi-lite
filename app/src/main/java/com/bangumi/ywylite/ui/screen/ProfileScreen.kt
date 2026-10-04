@@ -1,7 +1,5 @@
 ﻿package com.bangumi.ywylite.ui.screen
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -23,7 +21,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -32,6 +29,7 @@ import coil.compose.AsyncImage
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.TimelineItem
 import com.bangumi.ywylite.data.model.User
+import com.bangumi.ywylite.ui.component.BangumiLoginPanel
 import com.bangumi.ywylite.ui.component.EmptyView
 import com.bangumi.ywylite.ui.component.LoadingView
 import kotlinx.coroutines.launch
@@ -135,9 +133,6 @@ fun ProfileScreen(
                 modifier = Modifier.padding(padding),
                 onLoginSuccess = { user ->
                     uiState = uiState.copy(isLoggedIn = true, user = user, loading = false)
-                },
-                onError = { error ->
-                    uiState = uiState.copy(loading = false, error = error)
                 }
             )
         } else {
@@ -273,86 +268,15 @@ fun ProfileScreen(
 @Composable
 private fun LoginContent(
     modifier: Modifier = Modifier,
-    onLoginSuccess: (User) -> Unit,
-    onError: (String) -> Unit
+    onLoginSuccess: (User) -> Unit
 ) {
-    val app = App.INSTANCE
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-    var tokenInput by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue("")) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-
     Column(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(16.dp)
     ) {
-        Text("登录 Bangumi", style = MaterialTheme.typography.headlineSmall)
-
-        OutlinedButton(
-            onClick = {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://next.bgm.tv/demo/access-token"))
-                context.startActivity(intent)
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("前往 Bangumi 登录获取 Token")
-        }
-
-        Text(
-            text = "在浏览器中复制 Token 后粘贴到下方",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        OutlinedTextField(
-            value = tokenInput,
-            onValueChange = { tokenInput = it },
-            label = { Text("Access Token") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            shape = MaterialTheme.shapes.large
-        )
-
-        error?.let {
-            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        }
-
-        Button(
-            onClick = {
-                scope.launch {
-                    val t = tokenInput.text.trim()
-                    if (t.isNotBlank()) {
-                        loading = true
-                        error = null
-                        try {
-                            app.api.updateToken(t)
-                            val me = app.api.getMe()
-                            app.settings.saveToken(t)
-                            app.settings.saveUsername(me.username)
-                            onLoginSuccess(me)
-                        } catch (e: Exception) {
-                            app.api.updateToken(null)
-                            error = "登录失败: ${e.message}"
-                            onError(error ?: "登录失败")
-                        }
-                        loading = false
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !loading && tokenInput.text.isNotBlank()
-        ) {
-            if (loading) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-            } else {
-                Text("登录")
-            }
-        }
+        BangumiLoginPanel(onLoginSuccess = onLoginSuccess)
     }
 }
 

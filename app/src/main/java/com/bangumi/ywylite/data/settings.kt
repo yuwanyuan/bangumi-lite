@@ -63,6 +63,16 @@ class Settings(private val context: Context) {
         prefs[WEB_HOST_KEY] ?: ""
     }
 
+    /** 直接登录获取的 refresh_token，用于 access_token 过期后续期 */
+    val refreshToken: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[REFRESH_TOKEN_KEY] ?: ""
+    }
+
+    /** access_token 过期时间（epoch ms，0 = 未知） */
+    val tokenExpiresAt: Flow<Long> = context.dataStore.data.map { prefs ->
+        prefs[TOKEN_EXPIRES_AT_KEY] ?: 0L
+    }
+
     val proxySettings: Flow<ProxySettings> = context.dataStore.data.map { prefs ->
         ProxySettings(
             enabled = prefs[PROXY_ENABLED_KEY] ?: false,
@@ -94,6 +104,8 @@ class Settings(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs.remove(ACCESS_TOKEN_KEY)
             prefs.remove(USERNAME_KEY)
+            prefs.remove(REFRESH_TOKEN_KEY)
+            prefs.remove(TOKEN_EXPIRES_AT_KEY)
         }
     }
 
@@ -145,6 +157,18 @@ class Settings(private val context: Context) {
         }
     }
 
+    suspend fun saveRefreshToken(token: String) {
+        context.dataStore.edit { prefs ->
+            prefs[REFRESH_TOKEN_KEY] = token
+        }
+    }
+
+    suspend fun saveTokenExpiresAt(expiresAt: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[TOKEN_EXPIRES_AT_KEY] = expiresAt
+        }
+    }
+
     suspend fun saveDarkMode(mode: String) {
         context.dataStore.edit { prefs ->
             prefs[DARK_MODE_KEY] = mode
@@ -162,6 +186,8 @@ class Settings(private val context: Context) {
     private val PROXY_PASSWORD_KEY = stringPreferencesKey("proxy_password")
     private val API_HOST_KEY = stringPreferencesKey("api_host")
     private val WEB_HOST_KEY = stringPreferencesKey("web_host")
+    private val REFRESH_TOKEN_KEY = stringPreferencesKey("refresh_token")
+    private val TOKEN_EXPIRES_AT_KEY = longPreferencesKey("token_expires_at")
     private val DARK_MODE_KEY = stringPreferencesKey("dark_mode")
     }
 }

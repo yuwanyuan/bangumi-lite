@@ -231,6 +231,16 @@ data class CollectionModifyPayload(
     val tags: List<String>? = null
 )
 
+/** /oauth/access_token 返回 */
+@Serializable
+data class OAuthToken(
+    @SerialName("access_token") val accessToken: String = "",
+    @SerialName("refresh_token") val refreshToken: String = "",
+    @SerialName("expires_in") val expiresIn: Long = 0,
+    @SerialName("token_type") val tokenType: String = "Bearer",
+    @SerialName("user_id") val userId: Int = 0
+)
+
 @Serializable
 data class RelatedSubject(
     val id: Int = 0,

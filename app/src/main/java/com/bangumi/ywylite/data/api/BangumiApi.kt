@@ -13,13 +13,17 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.json.Json
 import okhttp3.Authenticator
+import okhttp3.Cookie
+import okhttp3.CookieJar
 import okhttp3.Credentials
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Route as OkRoute
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.util.concurrent.ConcurrentHashMap
 
 class BangumiApi {
 
@@ -52,15 +56,43 @@ class BangumiApi {
     private var webBaseUrl = "https://bgm.tv"
     private var _client: HttpClient = createClient(apiBaseUrl)
     private var _nextClient: HttpClient = createClient("https://next.bgm.tv")
-    private var _webClient: HttpClient = createClient(webBaseUrl)
+    private var _webClient: HttpClient = createClient(webBaseUrl, withCookies = true)
+    // OAuth 授权步骤需要读取 302 Location，单独建一个不跟随重定向、共享 Cookie 的客户端
+    private var _oauthClient: HttpClient = createClient(webBaseUrl, withCookies = true, followRedirects = false)
 
     val client: HttpClient get() = _client
     val nextClient: HttpClient get() = _nextClient
     val webClient: HttpClient get() = _webClient
 
-    private fun createClient(baseUrl: String): HttpClient {
+    // 直接登录用（OAuth authorization_code 授权码模式，官方不支持 password 直换）
+    private val oauthAppId = "bgm72386ac2893460ce3"
+    private val oauthAppSecret = "fbb6ceba1289a8854d3a88af87ac6dfd"
+    private val oauthRedirectUri = "https://bgm.tv/dev/app"
+
+    // Web 端会话 Cookie（登录流程用，进程内保存）
+    private val webCookieStore = ConcurrentHashMap<String, Cookie>()
+    private val webCookieJar = object : CookieJar {
+        override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+            cookies.forEach { c -> webCookieStore["${c.domain}|${c.name}"] = c }
+        }
+
+        override fun loadForRequest(url: HttpUrl): List<Cookie> =
+            webCookieStore.values.filter { it.matches(url) }.toList()
+    }
+
+    private fun createClient(
+        baseUrl: String,
+        withCookies: Boolean = false,
+        followRedirects: Boolean = true
+    ): HttpClient {
         val proxyConfig = buildProxyConfig()
         val okHttpBuilder = OkHttpClient.Builder()
+        if (withCookies) {
+            okHttpBuilder.cookieJar(webCookieJar)
+        }
+        if (!followRedirects) {
+            okHttpBuilder.followRedirects(false).followSslRedirects(false)
+        }
         if (proxyConfig != null) {
             okHttpBuilder.proxy(proxyConfig.proxy)
             val auth = proxyConfig.authenticator
@@ -140,13 +172,125 @@ class BangumiApi {
         _client.close()
         _nextClient.close()
         _webClient.close()
+        _oauthClient.close()
         _client = createClient(apiBaseUrl)
         _nextClient = createClient("https://next.bgm.tv")
-        _webClient = createClient(webBaseUrl)
+        _webClient = createClient(webBaseUrl, withCookies = true)
+        _oauthClient = createClient(webBaseUrl, withCookies = true, followRedirects = false)
     }
 
     fun updateToken(token: String?) {
         accessToken = token
+    }
+
+    // ------------------------------------------------------------------
+    // 直接登录（网页会话 → OAuth 授权码 → access_token，7 天有效可刷新续期）
+    // ------------------------------------------------------------------
+
+    /** 取登录页 formhash（顺带建立会话 Cookie） */
+    suspend fun getWebLoginFormHash(): String {
+        val html = webClient.get("/login").bodyAsText()
+        return Regex("""<input type="hidden" name="formhash" value="(.+?)">""").find(html)
+            ?.groupValues?.get(1)
+            ?: throw IllegalStateException("登录页解析失败，请稍后重试")
+    }
+
+    /** 登录验证码图片 */
+    suspend fun getWebLoginCaptcha(): ByteArray {
+        return webClient.get("/signup/captcha?${System.currentTimeMillis()}1").body()
+    }
+
+    /** 直接登录：邮箱 + 密码 + 验证码 → OAuth Token */
+    suspend fun loginWithWebAccount(email: String, password: String, captcha: String): OAuthToken {
+        val formhash = getWebLoginFormHash()
+
+        // 网页登录（bgm 直接返回 200 + Set-Cookie，不走 302）
+        val loginHtml = webClient.post("/FollowTheRabbit") {
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody(FormDataContent(parameters {
+                append("formhash", formhash)
+                append("referer", "")
+                append("dreferer", "")
+                append("email", email)
+                append("password", password)
+                append("captcha_challenge_field", captcha)
+                append("loginsubmit", "登录")
+            }))
+        }.bodyAsText()
+
+        if (loginHtml.contains("分钟内您将不能登录本站")) {
+            throw IllegalStateException("累计 5 次错误尝试，15 分钟内将不能登录，请稍后再试")
+        }
+        val hasSession = webCookieStore.values.any { it.name == "chii_auth" && it.value.isNotBlank() }
+        if (!hasSession) {
+            throw IllegalStateException("登录失败：邮箱、密码或验证码可能不正确")
+        }
+
+        val code = authorizeAndGetCode(formhash)
+        return exchangeOAuthCode(code)
+    }
+
+    /** 请求授权并从 302 回调地址中提取 code；已授权过的会直接 302 */
+    private suspend fun authorizeAndGetCode(loginFormHash: String): String {
+        val getResponse = _oauthClient.get("/oauth/authorize") {
+            url {
+                parameters.append("client_id", oauthAppId)
+                parameters.append("response_type", "code")
+                parameters.append("redirect_uri", oauthRedirectUri)
+            }
+        }
+        extractCodeFromUrl(getResponse.headers["Location"])?.let { return it }
+        val consentHtml = getResponse.bodyAsText()
+        val authorizeHash = Regex("""name="formhash" value="(.+?)"""").find(consentHtml)
+            ?.groupValues?.get(1) ?: loginFormHash
+
+        val postResponse = _oauthClient.post("/oauth/authorize") {
+            url {
+                parameters.append("client_id", oauthAppId)
+                parameters.append("response_type", "code")
+                parameters.append("redirect_uri", oauthRedirectUri)
+            }
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody(FormDataContent(parameters {
+                append("formhash", authorizeHash)
+                append("redirect_uri", "")
+                append("client_id", oauthAppId)
+                append("submit", "授权")
+            }))
+        }
+        extractCodeFromUrl(postResponse.headers["Location"])?.let { return it }
+        throw IllegalStateException("授权失败：未获取到授权码（${postResponse.status.value}）")
+    }
+
+    private fun extractCodeFromUrl(url: String?): String? {
+        if (url == null) return null
+        return Regex("""[?&]code=([0-9a-zA-Z]+)""").find(url)?.groupValues?.get(1)
+    }
+
+    private suspend fun exchangeOAuthCode(code: String): OAuthToken {
+        return webClient.post("/oauth/access_token") {
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody(FormDataContent(parameters {
+                append("grant_type", "authorization_code")
+                append("client_id", oauthAppId)
+                append("client_secret", oauthAppSecret)
+                append("code", code)
+                append("redirect_uri", oauthRedirectUri)
+            }))
+        }.body()
+    }
+
+    /** 用 refresh_token 换新的 access_token（每次刷新同时轮换 refresh_token） */
+    suspend fun refreshAccessToken(refreshToken: String): OAuthToken {
+        return webClient.post("/oauth/access_token") {
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody(FormDataContent(parameters {
+                append("grant_type", "refresh_token")
+                append("client_id", oauthAppId)
+                append("client_secret", oauthAppSecret)
+                append("refresh_token", refreshToken)
+            }))
+        }.body()
     }
 
     private fun HttpRequestBuilder.withAuth() {
