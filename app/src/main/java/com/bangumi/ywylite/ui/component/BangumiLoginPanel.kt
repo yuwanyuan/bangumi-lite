@@ -172,6 +172,7 @@ fun BangumiLoginPanel(onLoginSuccess: (User) -> Unit) {
                             app.settings.saveToken(t)
                             // 手动 Token 不带 refresh_token，清掉旧值避免误续期
                             app.settings.saveRefreshToken("")
+                            app.api.refreshToken = null
                             app.settings.saveTokenExpiresAt(0L)
                             app.api.getMe()
                         } else {
@@ -179,6 +180,7 @@ fun BangumiLoginPanel(onLoginSuccess: (User) -> Unit) {
                             app.api.updateToken(t.accessToken)
                             app.settings.saveToken(t.accessToken)
                             app.settings.saveRefreshToken(t.refreshToken)
+                            app.api.refreshToken = t.refreshToken
                             app.settings.saveTokenExpiresAt(System.currentTimeMillis() + t.expiresIn * 1000)
                             app.api.getMe()
                         }

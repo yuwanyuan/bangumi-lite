@@ -87,6 +87,7 @@ fun SubjectDetailScreen(
     val scope = rememberCoroutineScope()
     var uiState by remember { mutableStateOf(SubjectDetailUiState()) }
     val token by app.settings.accessToken.collectAsState(initial = null)
+    val username by app.settings.username.collectAsState(initial = null)
     val snackbarHostState = remember { SnackbarHostState() }
 
     // 章节状态接口要求条目已收藏；未登录/未收藏时给出提示而不是静默失败
@@ -102,6 +103,34 @@ fun SubjectDetailScreen(
             }
             else -> true
         }
+    }
+
+    // 拉取当前账号对该条目的收藏（状态/评分/吐槽/标签）与观看进度，写回 uiState
+    val syncCollection: suspend () -> Unit = sync@{
+        val t = token
+        val u = username
+        if (t == null || u.isNullOrBlank()) {
+            uiState = uiState.copy(userCollection = null, watchedEpisodes = emptySet())
+            return@sync
+        }
+        var attempts = 0
+        while (attempts < 4) {
+            val result = runCatching { app.api.getSubjectCollection(u, subjectId, t) }
+            if (result.isSuccess) {
+                // null = 服务端明确返回「未收藏」
+                uiState = uiState.copy(userCollection = result.getOrNull())
+                val epCollections = runCatching { app.api.getEpisodeCollection(subjectId, accessToken = t) }.getOrNull()
+                if (epCollections != null) {
+                    uiState = uiState.copy(
+                        watchedEpisodes = epCollections.filter { it.type == 2 }.mapNotNull { it.episode?.id }.toSet()
+                    )
+                }
+                return@sync
+            }
+            attempts++
+            delay(1000)
+        }
+        snackbarHostState.showSnackbar("收藏状态获取失败，请检查网络后重试")
     }
 
     LaunchedEffect(subjectId) {
@@ -122,30 +151,7 @@ fun SubjectDetailScreen(
         }
     }
 
-    // 收藏与观看进度依赖登录态：token 就绪（或变化）时重新拉取，保证按钮状态与服务端一致
-    LaunchedEffect(subjectId, token) {
-        if (token == null) {
-            uiState = uiState.copy(userCollection = null, watchedEpisodes = emptySet())
-            return@LaunchedEffect
-        }
-        try {
-            // 首次失败自动重试一次，避免瞬时网络问题导致收藏状态显示成未收藏
-            var collection = runCatching { app.api.getSubjectCollection(subjectId, token) }.getOrNull()
-            if (collection == null) {
-                delay(800)
-                collection = runCatching { app.api.getSubjectCollection(subjectId, token) }.getOrNull()
-            }
-            if (collection != null) {
-                uiState = uiState.copy(userCollection = collection)
-            }
-            val epCollections = runCatching { app.api.getEpisodeCollection(subjectId) }.getOrNull()
-            if (epCollections != null) {
-                uiState = uiState.copy(
-                    watchedEpisodes = epCollections.filter { it.type == 2 }.mapNotNull { it.episode?.id }.toSet()
-                )
-            }
-        } catch (_: Exception) {}
-    }
+    LaunchedEffect(subjectId, token, username) { syncCollection() }
 
     when {
         uiState.loading -> Scaffold(
@@ -190,8 +196,10 @@ fun SubjectDetailScreen(
         }
         uiState.subject != null -> SubjectDetailContent(
             uiState = uiState,
+            onSyncCollection = { scope.launch { syncCollection() } },
             onCollect = { type, comment, rate, tags ->
                 scope.launch {
+                    var failed: String? = null
                     try {
                         app.api.collectSubject(subjectId, type, rate = rate, comment = comment, tags = tags)
                         if (type == 0) {
@@ -210,13 +218,17 @@ fun SubjectDetailScreen(
                                         tags = tags ?: emptyList()
                                     )
                             )
-                            val result = runCatching { app.api.getSubjectCollection(subjectId, token) }
-                            val freshCollection = result.getOrNull()
-                            if (freshCollection != null) {
-                                uiState = uiState.copy(userCollection = freshCollection)
+                            if (!username.isNullOrBlank()) {
+                                runCatching { app.api.getSubjectCollection(username!!, subjectId, token) }
+                                    .getOrNull()?.let { freshCollection ->
+                                        uiState = uiState.copy(userCollection = freshCollection)
+                                    }
                             }
                         }
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        failed = e.message
+                    }
+                    failed?.let { snackbarHostState.showSnackbar("收藏失败：$it") }
                 }
             },
             onToggleWatched = { episodeId ->
@@ -275,6 +287,7 @@ fun SubjectDetailScreen(
 @Composable
 private fun SubjectDetailContent(
     uiState: SubjectDetailUiState,
+    onSyncCollection: () -> Unit,
     onCollect: (Int, String?, Int?, List<String>?) -> Unit,
     onToggleWatched: (Int) -> Unit,
     onMarkWatchedUpTo: (Episode) -> Unit,
@@ -423,6 +436,7 @@ private fun SubjectDetailContent(
                     currentComment = uiState.userCollection?.comment ?: "",
                     currentTags = uiState.userCollection?.tags ?: emptyList(),
                     publicTags = subject.tags,
+                    onSyncCollection = onSyncCollection,
                     onCollect = onCollect
                 )
 
@@ -946,12 +960,14 @@ private fun CollectionBar(
     currentComment: String = "",
     currentTags: List<String> = emptyList(),
     publicTags: List<TagInfo> = emptyList(),
+    onSyncCollection: () -> Unit = {},
     onCollect: (Int, String?, Int?, List<String>?) -> Unit
 ) {
     var showDialog by remember { mutableStateOf(false) }
     var selectedType by remember { mutableIntStateOf(currentType ?: 3) }
     var comment by remember { mutableStateOf(currentComment) }
     var rating by remember { mutableIntStateOf(currentRate) }
+    var ratingTouched by remember { mutableStateOf(false) }
     val selectedTags = remember { mutableStateListOf<String>() }
     // 标签区：0 我的标签 / 1 大家打的；折叠时限制高度可上下滑动
     var tagMode by remember { mutableIntStateOf(0) }
@@ -960,9 +976,11 @@ private fun CollectionBar(
     var newTagText by remember { mutableStateOf(TextFieldValue("")) }
 
     val openDialog = {
-        // 打开时与已获取的收藏状态全量对齐：状态、评分、吐槽、标签一并回显
+        // 打开时先同步一次账号最新状态，再把状态/评分/吐槽/标签全量回显
+        onSyncCollection()
         currentType?.let { selectedType = it }
         rating = currentRate
+        ratingTouched = false
         comment = currentComment
         selectedTags.clear()
         selectedTags.addAll(currentTags)
@@ -1123,7 +1141,10 @@ private fun CollectionBar(
                     )
                     Slider(
                         value = rating.coerceIn(1, 10).toFloat(),
-                        onValueChange = { rating = it.toInt() },
+                        onValueChange = {
+                            rating = it.toInt()
+                            ratingTouched = true
+                        },
                         valueRange = 1f..10f,
                         steps = 8
                     )
@@ -1131,11 +1152,17 @@ private fun CollectionBar(
             },
             confirmButton = {
                 TextButton(onClick = {
+                    // 未拖动过滑块且原无评分时提交 null，避免误打 1 星；标签不能含空格
+                    val rate = if (ratingTouched || currentRate > 0) rating.coerceIn(1, 10) else null
+                    val cleanTags = selectedTags
+                        .map { it.replace(Regex("""\s+"""), "") }
+                        .filter { it.isNotBlank() }
+                        .distinct()
                     onCollect(
                         selectedType,
                         comment.ifBlank { null },
-                        rating.coerceIn(1, 10),
-                        selectedTags.toList().ifEmpty { null }
+                        rate,
+                        cleanTags.ifEmpty { null }
                     )
                     showDialog = false
                 }) { Text("确定") }

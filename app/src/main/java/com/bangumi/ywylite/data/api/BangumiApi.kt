@@ -37,7 +37,15 @@ class BangumiApi {
     )
 
     var accessToken: String? = null
-    var onTokenInvalid: (() -> Unit)? = null
+
+    /** 直接登录保存的 refresh_token，供 access_token 过期后自动续期 */
+    var refreshToken: String? = null
+
+    /** 触发 401 的请求所携带的失效 token（用于去重并发续期） */
+    var onTokenInvalid: ((String?) -> Unit)? = null
+
+    /** 自动续期成功后回调（持久化新 token；refresh_token 会轮换） */
+    var onTokensRefreshed: ((OAuthToken) -> Unit)? = null
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -67,8 +75,8 @@ class BangumiApi {
     // 官方 API 与 Web 端域名，可由设置切换（见 updateApiHost）
     private var apiBaseUrl = "https://api.bgm.tv"
     private var webBaseUrl = "https://bgm.tv"
-    private var _client: HttpClient = createClient(apiBaseUrl)
-    private var _nextClient: HttpClient = createClient("https://next.bgm.tv")
+    private var _client: HttpClient = createClient(apiBaseUrl, throwOnError = true)
+    private var _nextClient: HttpClient = createClient("https://next.bgm.tv", throwOnError = true)
     private var _webClient: HttpClient = createClient(webBaseUrl, withCookies = true)
     // OAuth 授权步骤需要读取 302 Location，单独建一个不跟随重定向、共享 Cookie 的客户端
     private var _oauthClient: HttpClient = createClient(webBaseUrl, withCookies = true, followRedirects = false)
@@ -85,7 +93,8 @@ class BangumiApi {
     private fun createClient(
         baseUrl: String,
         withCookies: Boolean = false,
-        followRedirects: Boolean = true
+        followRedirects: Boolean = true,
+        throwOnError: Boolean = false
     ): HttpClient {
         val proxyConfig = buildProxyConfig()
         val okHttpBuilder = OkHttpClient.Builder()
@@ -106,6 +115,8 @@ class BangumiApi {
             engine {
                 preconfigured = okHttpBuilder.build()
             }
+            // 非 2xx 必须抛异常：否则错误体会被当成正常数据解析出空对象（收藏状态假“未收藏”等）
+            expectSuccess = throwOnError
             install(ContentNegotiation) {
                 json(json)
             }
@@ -123,7 +134,9 @@ class BangumiApi {
                 handleResponseException { exception ->
                     val response = (exception as? ClientRequestException)?.response
                     if (response?.status == HttpStatusCode.Unauthorized) {
-                        onTokenInvalid?.invoke()
+                        onTokenInvalid?.invoke(
+                            response.request.headers["Authorization"]?.removePrefix("Bearer ")?.trim()
+                        )
                     }
                     throw exception
                 }
@@ -175,8 +188,8 @@ class BangumiApi {
         _nextClient.close()
         _webClient.close()
         _oauthClient.close()
-        _client = createClient(apiBaseUrl)
-        _nextClient = createClient("https://next.bgm.tv")
+        _client = createClient(apiBaseUrl, throwOnError = true)
+        _nextClient = createClient("https://next.bgm.tv", throwOnError = true)
         _webClient = createClient(webBaseUrl, withCookies = true)
         _oauthClient = createClient(webBaseUrl, withCookies = true, followRedirects = false)
     }
@@ -413,12 +426,21 @@ class BangumiApi {
         }
     }
 
-    suspend fun getSubjectCollection(subjectId: Int, accessToken: String? = null): UserCollection {
-        return client.get("/v0/users/-/collections/${subjectId}") {
-            if (accessToken != null) {
-                header("Authorization", "Bearer $accessToken")
-            }
-        }.body()
+    /**
+     * 获取用户对指定条目的收藏。
+     * 注意：v0 的读取端点必须带 username（`-` 路径只有 POST/PATCH，没有 GET）；
+     * 带 token 查询自己时可读私密收藏；返回 null 表示未收藏（404）。
+     */
+    suspend fun getSubjectCollection(username: String, subjectId: Int, accessToken: String? = null): UserCollection? {
+        return try {
+            client.get("/v0/users/${username}/collections/${subjectId}") {
+                if (!accessToken.isNullOrBlank()) {
+                    header("Authorization", "Bearer $accessToken")
+                }
+            }.body()
+        } catch (e: ClientRequestException) {
+            if (e.response.status == HttpStatusCode.NotFound) null else throw e
+        }
     }
 
     suspend fun getComments(
@@ -443,10 +465,14 @@ class BangumiApi {
     suspend fun getEpisodeCollection(
         subjectId: Int,
         offset: Int = 0,
-        limit: Int = 200
+        limit: Int = 200,
+        accessToken: String? = null
     ): List<EpisodeCollection> {
         val response = client.get("/v0/users/-/collections/${subjectId}/episodes") {
-            withAuth()
+            val bearer = accessToken ?: this@BangumiApi.accessToken
+            if (bearer != null) {
+                header("Authorization", "Bearer $bearer")
+            }
             url {
                 parameters.append("offset", offset.toString())
                 parameters.append("limit", limit.toString())
