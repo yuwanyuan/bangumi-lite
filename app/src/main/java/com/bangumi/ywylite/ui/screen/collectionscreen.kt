@@ -1,8 +1,11 @@
 ﻿package com.bangumi.ywylite.ui.screen
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -22,6 +25,8 @@ data class CollectionUiState(
     val data: List<UserCollection> = emptyList(),
     val error: String? = null,
     val selectedType: Int? = 3,
+    val selectedSubjectType: Int? = null,
+    val showTypeFilter: Boolean = false,
     val offset: Int = 0,
     val hasMore: Boolean = false,
     val total: Int = 0
@@ -34,6 +39,15 @@ private val collectionTypes = listOf(
     1 to "想看",
     4 to "搁置",
     5 to "抛弃"
+)
+
+private val subjectTypeFilters = listOf(
+    null to "全部",
+    2 to "动画",
+    1 to "书籍",
+    3 to "音乐",
+    4 to "游戏",
+    6 to "三次元"
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -52,7 +66,7 @@ fun CollectionScreen(
         app.settings.username.collect { name -> username = name }
     }
 
-    LaunchedEffect(username, uiState.selectedType) {
+    LaunchedEffect(username, uiState.selectedType, uiState.selectedSubjectType) {
         if (username == null) {
             uiState = uiState.copy(loading = false)
             return@LaunchedEffect
@@ -62,6 +76,7 @@ fun CollectionScreen(
         try {
             val result = app.api.getUserCollections(
                 currentUsername,
+                subjectType = uiState.selectedSubjectType,
                 collectionType = uiState.selectedType,
                 offset = 0
             )
@@ -114,7 +129,14 @@ fun CollectionScreen(
                         val color = collectionTypeColors[type]
                         Tab(
                             selected = uiState.selectedType == type,
-                            onClick = { uiState = uiState.copy(selectedType = type) },
+                            onClick = {
+                                if (uiState.selectedType == type) {
+                                    // 再次点击当前筛选：弹出/收起类型二级筛选
+                                    uiState = uiState.copy(showTypeFilter = !uiState.showTypeFilter)
+                                } else {
+                                    uiState = uiState.copy(selectedType = type)
+                                }
+                            },
                             text = {
                                 if (color != null) {
                                     Text(label, color = if (uiState.selectedType == type) color else MaterialTheme.colorScheme.onSurface, fontWeight = if (uiState.selectedType == type) FontWeight.Bold else FontWeight.Normal)
@@ -123,6 +145,24 @@ fun CollectionScreen(
                                 }
                             }
                         )
+                    }
+                }
+
+                AnimatedVisibility(visible = uiState.showTypeFilter) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        subjectTypeFilters.forEach { (type, label) ->
+                            FilterChip(
+                                selected = uiState.selectedSubjectType == type,
+                                onClick = { uiState = uiState.copy(selectedSubjectType = type) },
+                                label = { Text(label) }
+                            )
+                        }
                     }
                 }
 
@@ -175,18 +215,23 @@ fun CollectionScreen(
                             }
                             if (uiState.hasMore) {
                                 item {
-                                    LaunchedEffect(Unit) {
+                                    LaunchedEffect(uiState.offset) {
                                         try {
                                             val result = app.api.getUserCollections(
                                                 username!!,
+                                                subjectType = uiState.selectedSubjectType,
                                                 collectionType = uiState.selectedType,
                                                 offset = uiState.offset
                                             )
-                                            uiState = uiState.copy(
-                                                data = uiState.data + result.data,
-                                                offset = uiState.offset + result.data.size,
-                                                hasMore = (uiState.offset + result.data.size) < uiState.total
-                                            )
+                                            uiState = if (result.data.isEmpty()) {
+                                                uiState.copy(hasMore = false)
+                                            } else {
+                                                uiState.copy(
+                                                    data = uiState.data + result.data,
+                                                    offset = uiState.offset + result.data.size,
+                                                    hasMore = (uiState.offset + result.data.size) < uiState.total
+                                                )
+                                            }
                                         } catch (_: Exception) {}
                                     }
                                     Box(

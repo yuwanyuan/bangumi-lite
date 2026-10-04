@@ -139,27 +139,9 @@ fun BangumiApp() {
                 SubjectDetailScreen(
                     subjectId = id,
                     onBack = { navController.popBackStack() },
-                    onOpenWebView = { url, title ->
-                        navController.navigate(Route.WebView.create(url, title))
-                    },
                     onTagClick = { tag, type ->
                         navController.navigate(Route.TagBrowse.create(tag, tag, type))
                     }
-                )
-            }
-            composable(
-                route = Route.WebView.path
-            ) { backStackEntry ->
-                val url = backStackEntry.arguments?.getString("url")?.let {
-                    java.net.URLDecoder.decode(it, "UTF-8")
-                } ?: ""
-                val title = backStackEntry.arguments?.getString("title")?.let {
-                    java.net.URLDecoder.decode(it, "UTF-8")
-                } ?: ""
-                WebViewScreen(
-                    url = url,
-                    title = title,
-                    onBack = { navController.popBackStack() }
                 )
             }
             composable(Route.Settings.path) {

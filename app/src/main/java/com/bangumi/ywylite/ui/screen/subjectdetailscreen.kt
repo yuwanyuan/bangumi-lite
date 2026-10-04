@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -39,6 +40,7 @@ import com.bangumi.ywylite.data.model.*
 import com.bangumi.ywylite.ui.component.EmptyView
 import com.bangumi.ywylite.ui.component.ErrorView
 import com.bangumi.ywylite.ui.component.LoadingView
+import com.bangumi.ywylite.ui.component.openInBrowser
 import kotlinx.coroutines.launch
 
 data class SubjectDetailUiState(
@@ -75,7 +77,6 @@ val collectionTypeLabels = mapOf(
 fun SubjectDetailScreen(
     subjectId: Int,
     onBack: () -> Unit,
-    onOpenWebView: (String, String) -> Unit = { _, _ -> },
     onTagClick: (String, Int) -> Unit = { _, _ -> }
 ) {
     val app = App.INSTANCE
@@ -254,7 +255,6 @@ fun SubjectDetailScreen(
                 app.api.getEpisodeComments(episodeId)
             },
             snackbarHostState = snackbarHostState,
-            onOpenWebView = onOpenWebView,
             onTagClick = onTagClick,
             onBack = onBack,
             onLoadMoreComments = {
@@ -283,12 +283,12 @@ private fun SubjectDetailContent(
     onMarkWatchedUpTo: (Episode) -> Unit,
     getEpisodeComments: suspend (Int) -> List<EpisodeComment>,
     snackbarHostState: SnackbarHostState,
-    onOpenWebView: (String, String) -> Unit,
     onTagClick: (String, Int) -> Unit,
     onBack: () -> Unit,
     onLoadMoreComments: () -> Unit
 ) {
     val subject = uiState.subject ?: return
+    val context = LocalContext.current
     val imageUrl = subject.images?.common?.replace("http://", "https://")
         ?: subject.images?.medium?.replace("http://", "https://")
         ?: subject.image.replace("http://", "https://")
@@ -351,7 +351,7 @@ private fun SubjectDetailContent(
                                 onClick = {
                                     showMenu = false
                                     val url = subject.url.ifEmpty { "https://bgm.tv/subject/${subject.id}" }
-                                    onOpenWebView(url, subject.nameCn.ifEmpty { subject.name })
+                                    openInBrowser(context, url)
                                 }
                             )
                         }
@@ -457,10 +457,9 @@ private fun SubjectDetailContent(
                     hasMore = uiState.commentHasMore,
                     onLoadMore = onLoadMoreComments,
                     onUserClick = { username ->
-                        onOpenWebView(
-                            "https://bgm.tv/user/$username",
-                            username
-                        )
+                        if (username.isNotEmpty()) {
+                            openInBrowser(context, "https://bgm.tv/user/$username")
+                        }
                     }
                 )
 

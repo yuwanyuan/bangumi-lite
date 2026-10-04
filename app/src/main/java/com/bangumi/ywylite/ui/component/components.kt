@@ -1,5 +1,8 @@
 ﻿package com.bangumi.ywylite.ui.component
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -14,6 +17,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.bangumi.ywylite.data.model.SubjectSmall
+
+/** 用系统默认浏览器打开链接；无浏览器可处理时不崩溃 */
+fun openInBrowser(context: Context, url: String) {
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+}
 
 @Composable
 fun SubjectCard(

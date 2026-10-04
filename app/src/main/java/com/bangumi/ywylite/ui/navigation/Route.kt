@@ -9,9 +9,6 @@ sealed class Route(val path: String) {
     data object SubjectDetail : Route("subject/{id}") {
         fun create(id: Int) = "subject/$id"
     }
-    data object WebView : Route("webview?url={url}&title={title}") {
-        fun create(url: String, title: String = "") = "webview?url=${java.net.URLEncoder.encode(url, "UTF-8")}&title=${java.net.URLEncoder.encode(title, "UTF-8")}"
-    }
     data object Settings : Route("settings")
     data object AccountSettings : Route("account_settings")
     data object CacheSettings : Route("cache_settings")

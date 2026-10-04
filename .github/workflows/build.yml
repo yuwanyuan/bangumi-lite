@@ -8,6 +8,18 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# master 上短时间内连续 push 只会出一次包：同一 group 的新 run 启动即取消旧 run，
+# 而被取消的那次通常还卡在下面的静默等待里，几乎不耗构建资源。
+# v* tag 与 workflow_dispatch 各自独立 group，不会被去抖。
+concurrency:
+  group: ${{ github.ref == 'refs/heads/master' && 'master' || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # master push 后出包前的静默等待秒数：期间再来 push 本次构建就会被取消。
+  # 调小更激进，0 关闭去抖。
+  MASTER_DEBOUNCE_SECONDS: '300'
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -15,6 +27,13 @@ jobs:
       contents: write
 
     steps:
+      - name: Wait for master to settle
+        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        run: |
+          seconds="${MASTER_DEBOUNCE_SECONDS:-0}"
+          echo "等待 ${seconds}s 静默期；期间若有新 push，本 run 会被取消（去抖）"
+          sleep "${seconds}"
+
       - uses: actions/checkout@v4
 
       - name: Set up JDK 17
