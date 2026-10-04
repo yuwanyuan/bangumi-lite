@@ -13,12 +13,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -35,7 +34,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,6 +45,7 @@ import com.bangumi.ywylite.data.model.*
 import com.bangumi.ywylite.ui.component.EmptyView
 import com.bangumi.ywylite.ui.component.ErrorView
 import com.bangumi.ywylite.ui.component.LoadingView
+import com.bangumi.ywylite.ui.component.UserAges
 import com.bangumi.ywylite.ui.component.openInBrowser
 import kotlinx.coroutines.launch
 
@@ -108,36 +107,38 @@ fun SubjectDetailScreen(
         uiState = uiState.copy(loading = true, error = null)
         try {
             val subject = app.api.getSubject(subjectId)
-            var episodes = emptyList<Episode>()
-            var relatedSubjects = emptyList<RelatedSubject>()
-            var userCollection: UserCollection? = null
-            var watchedEpisodes = emptySet<Int>()
-
-            val episodesResult = runCatching { app.api.getEpisodes(subjectId).data }
-            episodes = episodesResult.getOrDefault(emptyList())
-            val relatedResult = runCatching { app.api.getRelatedSubjects(subjectId) }
-            relatedSubjects = relatedResult.getOrDefault(emptyList())
-            if (token != null) {
-                val collectionResult = runCatching { app.api.getSubjectCollection(subjectId, token) }
-                userCollection = collectionResult.getOrNull()
-                val epCollectionResult = runCatching { app.api.getEpisodeCollection(subjectId) }
-                val epCollections = epCollectionResult.getOrNull()
-                if (epCollections != null) {
-                    watchedEpisodes = epCollections.filter { it.type == 2 }.mapNotNull { it.episode?.id }.toSet()
-                }
-            }
+            val episodes = runCatching { app.api.getEpisodes(subjectId).data }.getOrDefault(emptyList())
+            val relatedSubjects = runCatching { app.api.getRelatedSubjects(subjectId) }.getOrDefault(emptyList())
 
             uiState = uiState.copy(
                 loading = false,
                 subject = subject,
                 episodes = episodes,
-                relatedSubjects = relatedSubjects,
-                userCollection = userCollection,
-                watchedEpisodes = watchedEpisodes
+                relatedSubjects = relatedSubjects
             )
         } catch (e: Exception) {
             uiState = uiState.copy(loading = false, error = e.message)
         }
+    }
+
+    // 收藏与观看进度依赖登录态：token 就绪（或变化）时重新拉取，保证按钮状态与服务端一致
+    LaunchedEffect(subjectId, token) {
+        if (token == null) {
+            uiState = uiState.copy(userCollection = null, watchedEpisodes = emptySet())
+            return@LaunchedEffect
+        }
+        try {
+            val collection = runCatching { app.api.getSubjectCollection(subjectId, token) }.getOrNull()
+            if (collection != null) {
+                uiState = uiState.copy(userCollection = collection)
+            }
+            val epCollections = runCatching { app.api.getEpisodeCollection(subjectId) }.getOrNull()
+            if (epCollections != null) {
+                uiState = uiState.copy(
+                    watchedEpisodes = epCollections.filter { it.type == 2 }.mapNotNull { it.episode?.id }.toSet()
+                )
+            }
+        } catch (_: Exception) {}
     }
 
     when {
@@ -415,7 +416,7 @@ private fun SubjectDetailContent(
                     currentRate = uiState.userCollection?.rate ?: 0,
                     currentComment = uiState.userCollection?.comment ?: "",
                     currentTags = uiState.userCollection?.tags ?: emptyList(),
-                    subjectTags = subject.tags.map { it.name },
+                    publicTags = subject.tags,
                     onCollect = onCollect
                 )
 
@@ -891,6 +892,7 @@ private fun EpisodeCommentRow(comment: EpisodeComment) {
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
                 )
+                RegAgeText(0, comment.avatar)
                 Text(
                     text = "#${comment.floor}",
                     style = MaterialTheme.typography.labelSmall,
@@ -937,15 +939,25 @@ private fun CollectionBar(
     currentRate: Int = 0,
     currentComment: String = "",
     currentTags: List<String> = emptyList(),
-    subjectTags: List<String> = emptyList(),
+    publicTags: List<TagInfo> = emptyList(),
     onCollect: (Int, String?, Int?, List<String>?) -> Unit
 ) {
     var showDialog by remember { mutableStateOf(false) }
     var selectedType by remember { mutableIntStateOf(currentType ?: 3) }
     var comment by remember { mutableStateOf(currentComment) }
     var rating by remember { mutableIntStateOf(currentRate) }
-    var tagInput by remember { mutableStateOf(TextFieldValue("")) }
     val selectedTags = remember { mutableStateListOf<String>() }
+    // 标签区：0 我的标签 / 1 大家打的；折叠时限制高度可上下滑动
+    var tagMode by remember { mutableIntStateOf(0) }
+    var tagsExpanded by remember { mutableStateOf(false) }
+    var showAddTagDialog by remember { mutableStateOf(false) }
+    var newTagText by remember { mutableStateOf(TextFieldValue("")) }
+
+    val openDialog = {
+        // 打开时与已获取的收藏状态对齐
+        currentType?.let { selectedType = it }
+        showDialog = true
+    }
 
     val isCollected = currentType != null
     val currentColor = collectionTypeColors[currentType] ?: MaterialTheme.colorScheme.primary
@@ -963,7 +975,7 @@ private fun CollectionBar(
 
     if (isCollected) {
         Button(
-            onClick = { showDialog = true },
+            onClick = { openDialog() },
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(
                 containerColor = currentColor.copy(alpha = 0.15f),
@@ -976,7 +988,7 @@ private fun CollectionBar(
         }
     } else {
         OutlinedButton(
-            onClick = { showDialog = true },
+            onClick = { openDialog() },
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)
         ) {
@@ -1016,42 +1028,71 @@ private fun CollectionBar(
                         }
                     }
 
-                    Text("我的标签", style = MaterialTheme.typography.labelMedium)
-                    if (subjectTags.isNotEmpty()) {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            subjectTags.take(12).forEach { tag ->
-                                val selected = tag in selectedTags
-                                FilterChip(
-                                    selected = selected,
-                                    onClick = {
-                                        if (selected) selectedTags.remove(tag) else selectedTags.add(tag)
-                                    },
-                                    label = { Text(tag) }
-                                )
+                    // 标签区：可切换「我的标签 / 大家打的」，默认折叠为两行高度、区域内可上下滑动
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("标签", style = MaterialTheme.typography.labelMedium)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf(0 to "我的标签", 1 to "大家打的").forEach { (mode, label) ->
+                                Surface(
+                                    shape = RoundedCornerShape(50),
+                                    color = if (tagMode == mode) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                                    modifier = Modifier.clickable { tagMode = mode }
+                                ) {
+                                    Text(
+                                        label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (tagMode == mode) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
                             }
                         }
+                        Spacer(modifier = Modifier.weight(1f))
+                        Icon(
+                            Icons.Default.ExpandLess,
+                            contentDescription = if (tagsExpanded) "收起标签区" else "展开标签区",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .size(20.dp)
+                                .clickable { tagsExpanded = !tagsExpanded }
+                        )
                     }
-                    OutlinedTextField(
-                        value = tagInput,
-                        onValueChange = { tagInput = it },
-                        label = { Text("自定义标签（回车添加）") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = {
-                            val t = tagInput.text.trim()
-                            if (t.isNotEmpty() && selectedTags.none { it.equals(t, ignoreCase = true) }) {
-                                selectedTags.add(t)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = if (tagsExpanded) 160.dp else 64.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                if (tagMode == 0) {
+                                    selectedTags.forEach { tag ->
+                                        SmallTagChip(text = tag, selected = true, onClick = { selectedTags.remove(tag) })
+                                    }
+                                    SmallTagChip(text = "＋ 添加", selected = false, onClick = { showAddTagDialog = true })
+                                } else {
+                                    publicTags.forEach { tag ->
+                                        SmallTagChip(
+                                            text = if (tag.count > 0) "${tag.name} ${tag.count}" else tag.name,
+                                            selected = tag.name in selectedTags,
+                                            onClick = {
+                                                if (tag.name in selectedTags) selectedTags.remove(tag.name)
+                                                else selectedTags.add(tag.name)
+                                            }
+                                        )
+                                    }
+                                }
                             }
-                            tagInput = TextFieldValue("")
-                        })
-                    )
-                    if (selectedTags.isNotEmpty()) {
+                        }
+                    if (tagMode == 0 && selectedTags.isEmpty()) {
                         Text(
-                            "已选：${selectedTags.joinToString("、")}",
+                            "点「＋ 添加」自定义，或切到「大家打的」点选",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1100,6 +1141,55 @@ private fun CollectionBar(
                     TextButton(onClick = { showDialog = false }) { Text("取消") }
                 }
             }
+        )
+
+        if (showAddTagDialog) {
+            AlertDialog(
+                onDismissRequest = { showAddTagDialog = false },
+                title = { Text("添加标签") },
+                text = {
+                    OutlinedTextField(
+                        value = newTagText,
+                        onValueChange = { newTagText = it },
+                        label = { Text("标签名") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val t = newTagText.text.trim()
+                            if (t.isNotEmpty() && selectedTags.none { it.equals(t, ignoreCase = true) }) {
+                                selectedTags.add(t)
+                            }
+                            newTagText = TextFieldValue("")
+                            showAddTagDialog = false
+                        },
+                        enabled = newTagText.text.isNotBlank()
+                    ) { Text("添加") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showAddTagDialog = false }) { Text("取消") }
+                }
+            )
+        }
+    }
+}
+
+/** 收藏弹窗内的小号标签芯片 */
+@Composable
+private fun SmallTagChip(text: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        modifier = Modifier.clickable(onClick = onClick)
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
         )
     }
 }
@@ -1227,6 +1317,19 @@ private fun SubjectCommentsSheet(
     }
 }
 
+/** 用户名旁的站龄徽标：按 ID/头像离线推算，无法推算时不显示 */
+@Composable
+private fun RegAgeText(userId: Int, avatar: String) {
+    val age = remember(userId, avatar) { UserAges.estimate(userId, avatar) }
+    if (age != null) {
+        Text(
+            text = "站龄 ${UserAges.format(age)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        )
+    }
+}
+
 @Composable
 private fun SubjectCommentCard(
     comment: CommentItem,
@@ -1269,7 +1372,9 @@ private fun SubjectCommentCard(
                             }
                         }
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                RegAgeText(comment.user?.id ?: 0, avatarUrl)
+                Spacer(modifier = Modifier.width(6.dp))
                 if (comment.rate > 0) {
                     Text("★${comment.rate}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
