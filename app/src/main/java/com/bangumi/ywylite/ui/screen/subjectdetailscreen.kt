@@ -1,5 +1,15 @@
 package com.bangumi.ywylite.ui.screen
 
+import android.Manifest
+import android.content.ContentValues
+import android.content.Context
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.os.Build
+import android.provider.MediaStore
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -16,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.FastForward
@@ -32,14 +43,26 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.request.ImageRequest
+import coil.request.SuccessResult
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.*
 import com.bangumi.ywylite.ui.component.EmptyView
@@ -47,8 +70,16 @@ import com.bangumi.ywylite.ui.component.ErrorView
 import com.bangumi.ywylite.ui.component.LoadingView
 import com.bangumi.ywylite.ui.component.UserAges
 import com.bangumi.ywylite.ui.component.openInBrowser
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
 
 data class SubjectDetailUiState(
     val loading: Boolean = true,
@@ -57,7 +88,8 @@ data class SubjectDetailUiState(
     val userCollection: UserCollection? = null,
     val episodes: List<Episode> = emptyList(),
     val watchedEpisodes: Set<Int> = emptySet(),
-    val relatedSubjects: List<RelatedSubject> = emptyList()
+    val relatedSubjects: List<RelatedSubject> = emptyList(),
+    val characters: List<CharacterItem> = emptyList()
 )
 
 val collectionTypeColors = mapOf(
@@ -81,7 +113,8 @@ val collectionTypeLabels = mapOf(
 fun SubjectDetailScreen(
     subjectId: Int,
     onBack: () -> Unit,
-    onTagClick: (String, Int) -> Unit = { _, _ -> }
+    onTagClick: (String, Int) -> Unit = { _, _ -> },
+    onSubjectClick: (Int) -> Unit = {}
 ) {
     val app = App.INSTANCE
     val scope = rememberCoroutineScope()
@@ -139,12 +172,14 @@ fun SubjectDetailScreen(
             val subject = app.api.getSubject(subjectId)
             val episodes = runCatching { app.api.getEpisodes(subjectId).data }.getOrDefault(emptyList())
             val relatedSubjects = runCatching { app.api.getRelatedSubjects(subjectId) }.getOrDefault(emptyList())
+            val characters = runCatching { app.api.getSubjectCharacters(subjectId) }.getOrDefault(emptyList())
 
             uiState = uiState.copy(
                 loading = false,
                 subject = subject,
                 episodes = episodes,
-                relatedSubjects = relatedSubjects
+                relatedSubjects = relatedSubjects,
+                characters = characters
             )
         } catch (e: Exception) {
             uiState = uiState.copy(loading = false, error = e.message)
@@ -277,13 +312,14 @@ fun SubjectDetailScreen(
                 app.api.getComments(sid, offset = offset, limit = limit)
             },
             onTagClick = onTagClick,
+            onSubjectClick = onSubjectClick,
             onBack = onBack
         )
         else -> EmptyView()
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun SubjectDetailContent(
     uiState: SubjectDetailUiState,
@@ -295,16 +331,20 @@ private fun SubjectDetailContent(
     getComments: suspend (Int, Int, Int) -> CommentResponse,
     snackbarHostState: SnackbarHostState,
     onTagClick: (String, Int) -> Unit,
+    onSubjectClick: (Int) -> Unit,
     onBack: () -> Unit
 ) {
     val subject = uiState.subject ?: return
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
     val imageUrl = subject.images?.common?.replace("http://", "https://")
         ?: subject.images?.medium?.replace("http://", "https://")
         ?: subject.image.replace("http://", "https://")
 
     var showMenu by remember { mutableStateOf(false) }
     var showCommentsSheet by remember { mutableStateOf(false) }
+    var showImageViewer by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         AsyncImage(
@@ -387,17 +427,25 @@ private fun SubjectDetailContent(
                         modifier = Modifier
                             .width(120.dp)
                             .height(160.dp)
-                            .clip(RoundedCornerShape(8.dp)),
+                            .clip(RoundedCornerShape(8.dp))
+                            .combinedClickable(
+                                onClick = { showImageViewer = true }
+                            ),
                         contentScale = ContentScale.Crop
                     )
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        SelectionContainer {
-                            Text(
-                                text = subject.nameCn.ifEmpty { subject.name },
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold
+                        Text(
+                            text = subject.nameCn.ifEmpty { subject.name },
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.combinedClickable(
+                                onClick = {},
+                                onLongClick = {
+                                    clipboard.setText(AnnotatedString(subject.nameCn.ifEmpty { subject.name }))
+                                    scope.launch { snackbarHostState.showSnackbar("已复制标题") }
+                                }
                             )
-                        }
+                        )
                         if (subject.nameCn.isNotEmpty()) {
                             SelectionContainer {
                                 Text(
@@ -462,8 +510,12 @@ private fun SubjectDetailContent(
                     )
                 }
 
+                if (uiState.characters.isNotEmpty()) {
+                    CharactersSection(uiState.characters)
+                }
+
                 if (uiState.relatedSubjects.isNotEmpty()) {
-                    RelatedSection(relatedSubjects = uiState.relatedSubjects, onSubjectClick = {})
+                    RelatedSection(relatedSubjects = uiState.relatedSubjects, onSubjectClick = onSubjectClick)
                 }
 
                 Spacer(modifier = Modifier.height(72.dp))
@@ -517,6 +569,17 @@ private fun SubjectDetailContent(
                 }
             )
         }
+    }
+
+    if (showImageViewer) {
+        SubjectImageViewer(
+            imageUrl = subject.images?.large?.replace("http://", "https://")
+                ?: subject.images?.common?.replace("http://", "https://")
+                ?: imageUrl,
+            title = subject.nameCn.ifEmpty { subject.name },
+            infobox = subject.infobox,
+            onDismiss = { showImageViewer = false }
+        )
     }
 }
 
@@ -969,8 +1032,8 @@ private fun CollectionBar(
     var rating by remember { mutableIntStateOf(currentRate) }
     var ratingTouched by remember { mutableStateOf(false) }
     val selectedTags = remember { mutableStateListOf<String>() }
-    // 标签区：0 我的标签 / 1 大家打的；折叠时限制高度可上下滑动
-    var tagMode by remember { mutableIntStateOf(0) }
+    // 标签区：0 我的 / 1 all（大家打的）；默认显示 all
+    var tagMode by remember { mutableIntStateOf(1) }
     var tagsExpanded by remember { mutableStateOf(false) }
     var showAddTagDialog by remember { mutableStateOf(false) }
     var newTagText by remember { mutableStateOf(TextFieldValue("")) }
@@ -1056,7 +1119,7 @@ private fun CollectionBar(
                         }
                     }
 
-                    // 标签区：可切换「我的标签 / 大家打的」，默认折叠为两行高度、区域内可上下滑动
+                    // 标签区：可切换「all（大家打的）/ 我的」，默认折叠为两行高度、区域内可上下滑动
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -1064,7 +1127,7 @@ private fun CollectionBar(
                         Text("标签", style = MaterialTheme.typography.labelMedium)
                         Spacer(modifier = Modifier.width(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            listOf(0 to "我的标签", 1 to "大家打的").forEach { (mode, label) ->
+                            listOf(1 to "all", 0 to "我的").forEach { (mode, label) ->
                                 Surface(
                                     shape = RoundedCornerShape(50),
                                     color = if (tagMode == mode) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
@@ -1120,7 +1183,7 @@ private fun CollectionBar(
                         }
                     if (tagMode == 0 && selectedTags.isEmpty()) {
                         Text(
-                            "点「＋ 添加」自定义，或切到「大家打的」点选",
+                            "点「＋ 添加」自定义，或切到「all」点选",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1135,25 +1198,31 @@ private fun CollectionBar(
                         maxLines = 4
                     )
 
+                    // 最左档为「不选择」（0），v0 接口约定 rate=0 表示删除评分
                     Text(
-                        "评分 ★${rating.coerceIn(1, 10)} / 10",
+                        if (rating <= 0) "评分：不选择" else "评分 ★${rating.coerceIn(1, 10)} / 10",
                         style = MaterialTheme.typography.labelMedium
                     )
                     Slider(
-                        value = rating.coerceIn(1, 10).toFloat(),
+                        value = rating.coerceIn(0, 10).toFloat(),
                         onValueChange = {
                             rating = it.toInt()
                             ratingTouched = true
                         },
-                        valueRange = 1f..10f,
-                        steps = 8
+                        valueRange = 0f..10f,
+                        steps = 9
                     )
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    // 未拖动过滑块且原无评分时提交 null，避免误打 1 星；标签不能含空格
-                    val rate = if (ratingTouched || currentRate > 0) rating.coerceIn(1, 10) else null
+                    // 拖到最左（0）= 明确不评分，v0 约定提交 0 即删除评分；
+                    // 未拖动过且原无评分时提交 null；未拖动过且原有评分则保持原值
+                    val rate = when {
+                        ratingTouched -> rating.coerceIn(0, 10)
+                        currentRate > 0 -> currentRate
+                        else -> null
+                    }
                     val cleanTags = selectedTags
                         .map { it.replace(Regex("""\s+"""), "") }
                         .filter { it.isNotBlank() }
@@ -1231,6 +1300,277 @@ private fun SmallTagChip(text: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
+/** infobox 的 value 展平为字符串：字符串直接用，[{v: "..."}] 数组用「、」连接 */
+private fun infoboxValue(value: JsonElement): String = when (value) {
+    is JsonNull -> ""
+    is JsonPrimitive -> value.content
+    is JsonArray -> value.mapNotNull { (it as? JsonObject)?.get("v")?.jsonPrimitive?.content }.joinToString("、")
+    else -> ""
+}
+
+/**
+ * 全屏封面查看器：上半放大封面（长按保存到相册），下半滚动显示条目 infobox 详情。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SubjectImageViewer(
+    imageUrl: String,
+    title: String,
+    infobox: List<InfoboxItem>,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var saving by remember { mutableStateOf(false) }
+    var pendingSave by remember { mutableStateOf(false) }
+
+    val doSave = {
+        if (!saving) {
+            saving = true
+            scope.launch {
+                val message = runCatching { saveImageToGallery(context, imageUrl) }
+                    .fold({ "已保存到相册 Pictures/ywylite" }, { "保存失败：${it.message}" })
+                saving = false
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            }
+        }
+        Unit
+    }
+
+    // Android 9 及以下写共享存储需要运行时权限，授权后再继续保存
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted && pendingSave) {
+            pendingSave = false
+            doSave()
+        } else if (!granted) {
+            pendingSave = false
+            Toast.makeText(context, "没有存储权限，无法保存图片", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val saveAction = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        ) {
+            doSave()
+        } else {
+            pendingSave = true
+            permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        Unit
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "关闭", tint = Color.White)
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.45f),
+                contentAlignment = Alignment.Center
+            ) {
+                AsyncImage(
+                    model = imageUrl,
+                    contentDescription = title,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .combinedClickable(
+                            onClick = {},
+                            onLongClick = saveAction
+                        ),
+                    contentScale = ContentScale.Fit
+                )
+                if (saving) {
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp), color = Color.White)
+                } else {
+                    Text(
+                        text = "长按图片可保存",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.5f),
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 10.dp)
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.55f)
+                    .background(Color(0xFF121212))
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "详情",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                if (infobox.isEmpty()) {
+                    Text(
+                        "暂无详细信息",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.5f)
+                    )
+                }
+                infobox.forEach { item ->
+                    val value = infoboxValue(item.value)
+                    if (value.isEmpty()) return@forEach
+                    val isUrl = value.startsWith("http://") || value.startsWith("https://")
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(SpanStyle(color = Color(0xFF9E9E9E), fontWeight = FontWeight.SemiBold)) {
+                                append("${item.key}  ")
+                            }
+                            append(value)
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White,
+                        modifier = if (isUrl) Modifier.clickable { openInBrowser(context, value) } else Modifier
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+        }
+    }
+}
+
+/** 下载图片并写入系统相册（Pictures/ywylite），返回提示信息 */
+private suspend fun saveImageToGallery(context: Context, url: String): String = withContext(Dispatchers.IO) {
+    val request = ImageRequest.Builder(context)
+        .data(url)
+        .allowHardware(false)
+        .build()
+    val drawable = (context.imageLoader.execute(request) as? SuccessResult)?.drawable
+        ?: error("图片加载失败")
+    val bitmap = drawable.toBitmap()
+    val fileName = "bgm_${System.currentTimeMillis()}.jpg"
+    val values = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ywylite")
+        }
+    }
+    val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        ?: error("无法写入相册")
+    context.contentResolver.openOutputStream(uri)?.use { out ->
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+    } ?: error("无法写入相册")
+    "Pictures/ywylite/$fileName"
+}
+
+/** 角色介绍：头像 + 名字 + 关系（主角/配角）+ 声优；默认显示前 3 个，可展开 */
+@Composable
+private fun CharactersSection(characters: List<CharacterItem>) {
+    var expanded by remember { mutableStateOf(false) }
+    // 超长条目（如航海王）角色数以千计，展开时截断防止一次渲染卡顿
+    val maxShown = 100
+    val shown = if (expanded) characters.take(maxShown) else characters.take(3)
+
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded },
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("角色介绍 (${characters.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            if (characters.size > 3) {
+                Text(
+                    text = if (expanded) "收起" else "展开",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            shown.forEach { character ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val avatar = character.images?.medium?.replace("http://", "https://")
+                        ?: character.images?.small?.replace("http://", "https://") ?: ""
+                    if (avatar.isNotEmpty()) {
+                        AsyncImage(
+                            model = avatar,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = character.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (character.relation.isNotEmpty()) {
+                                Text(
+                                    text = character.relation,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            character.actors.firstOrNull()?.let { actor ->
+                                Text(
+                                    text = "CV ${actor.name}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            if (expanded && characters.size > maxShown) {
+                Text(
+                    "共 ${characters.size} 个角色，仅显示前 $maxShown 个",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun RelatedSection(
     relatedSubjects: List<RelatedSubject>,
@@ -1248,6 +1588,20 @@ private fun RelatedSection(
     if (expanded) {
         relatedSubjects.forEach { related ->
             ListItem(
+                leadingContent = {
+                    val thumb = related.images?.common?.replace("http://", "https://")
+                        ?: related.images?.medium?.replace("http://", "https://") ?: ""
+                    if (thumb.isNotEmpty()) {
+                        AsyncImage(
+                            model = thumb,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                },
                 headlineContent = { Text(related.nameCn.ifEmpty { related.name }, style = MaterialTheme.typography.bodySmall) },
                 supportingContent = { Text(related.relation, style = MaterialTheme.typography.labelSmall) },
                 modifier = Modifier.clickable { onSubjectClick(related.id) }

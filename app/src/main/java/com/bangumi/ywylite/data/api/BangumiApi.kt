@@ -457,7 +457,13 @@ class BangumiApi {
     }
 
     suspend fun getRelatedSubjects(subjectId: Int): List<RelatedSubject> {
-        return client.get("/v0/subjects/${subjectId}/related") {
+        return client.get("/v0/subjects/${subjectId}/subjects") {
+            withAuth()
+        }.body()
+    }
+
+    suspend fun getSubjectCharacters(subjectId: Int): List<CharacterItem> {
+        return client.get("/v0/subjects/${subjectId}/characters") {
             withAuth()
         }.body()
     }

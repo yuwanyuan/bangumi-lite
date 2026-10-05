@@ -2,6 +2,8 @@ package com.bangumi.ywylite.data.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 
 @Serializable
 data class Avatar(
@@ -108,12 +110,40 @@ data class Subject(
     val tags: List<TagInfo> = emptyList(),
     val url: String = "",
     val eps: Int = 0,
-    @SerialName("air_date")
+    // v0 接口的日期字段名是 date（airDate 是旧接口字段名，v0 下恒为空）
+    @SerialName("date")
     val airDate: String = "",
     @SerialName("total_episodes")
     val totalEpisodes: Int = 0,
     val collection: CollectionCount? = null,
-    val comment: Int = 0
+    val comment: Int = 0,
+    val infobox: List<InfoboxItem> = emptyList()
+)
+
+/** 条目信息盒（infobox）条目；value 可能是字符串，也可能是 [{v: "..."}] 数组（多人/多项） */
+@Serializable
+data class InfoboxItem(
+    val key: String = "",
+    val value: JsonElement = JsonNull
+)
+
+/** /v0/subjects/{id}/characters 的角色条目；v0 不提供 name_cn */
+@Serializable
+data class CharacterItem(
+    val id: Int = 0,
+    val name: String = "",
+    val type: Int = 0,
+    val relation: String = "",
+    val summary: String = "",
+    val images: SubjectImages? = null,
+    val actors: List<CharacterActor> = emptyList()
+)
+
+@Serializable
+data class CharacterActor(
+    val id: Int = 0,
+    val name: String = "",
+    val images: PersonImages? = null
 )
 
 @Serializable

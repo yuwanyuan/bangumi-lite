@@ -141,6 +141,9 @@ fun BangumiApp() {
                     onBack = { navController.popBackStack() },
                     onTagClick = { tag, type ->
                         navController.navigate(Route.TagBrowse.create(tag, tag, type))
+                    },
+                    onSubjectClick = { sid ->
+                        navController.navigate(Route.SubjectDetail.create(sid))
                     }
                 )
             }
