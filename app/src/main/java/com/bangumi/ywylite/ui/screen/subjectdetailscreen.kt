@@ -8,9 +8,18 @@ import android.graphics.Bitmap
 import android.os.Build
 import android.provider.MediaStore
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,6 +28,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -39,12 +49,23 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -52,11 +73,11 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import coil.compose.AsyncImage
@@ -345,8 +366,26 @@ private fun SubjectDetailContent(
     var showMenu by remember { mutableStateOf(false) }
     var showCommentsSheet by remember { mutableStateOf(false) }
     var showImageViewer by remember { mutableStateOf(false) }
+    // 封面在窗口中的位置与查看器尺寸，用于「从封面放大/缩回封面」的过渡动画
+    var coverBounds by remember { mutableStateOf<Rect?>(null) }
+    var overlaySize by remember { mutableStateOf(IntSize.Zero) }
+    val viewerSpec = remember(coverBounds, overlaySize) {
+        val cb = coverBounds
+        if (cb != null && overlaySize.width > 0 && overlaySize.height > 0) {
+            TransformOrigin(
+                (cb.center.x / overlaySize.width).coerceIn(0f, 1f),
+                (cb.center.y / overlaySize.height).coerceIn(0f, 1f)
+            ) to (cb.width / overlaySize.width).coerceIn(0.1f, 0.9f)
+        } else {
+            TransformOrigin(0.5f, 0.5f) to 0.6f
+        }
+    }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onSizeChanged { overlaySize = it }
+    ) {
         AsyncImage(
             model = imageUrl,
             contentDescription = null,
@@ -430,7 +469,8 @@ private fun SubjectDetailContent(
                             .clip(RoundedCornerShape(8.dp))
                             .combinedClickable(
                                 onClick = { showImageViewer = true }
-                            ),
+                            )
+                            .onGloballyPositioned { coverBounds = it.boundsInWindow() },
                         contentScale = ContentScale.Crop
                     )
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -571,7 +611,21 @@ private fun SubjectDetailContent(
         }
     }
 
-    if (showImageViewer) {
+    // 封面查看器：页内覆盖层（非独立窗口），打开/关闭都从封面位置缩放过渡
+    BackHandler(enabled = showImageViewer) { showImageViewer = false }
+    AnimatedVisibility(
+        visible = showImageViewer,
+        enter = scaleIn(
+            initialScale = viewerSpec.second,
+            transformOrigin = viewerSpec.first,
+            animationSpec = tween(300)
+        ) + fadeIn(tween(200)),
+        exit = scaleOut(
+            targetScale = viewerSpec.second,
+            transformOrigin = viewerSpec.first,
+            animationSpec = tween(260)
+        ) + fadeOut(tween(180))
+    ) {
         SubjectImageViewer(
             imageUrl = subject.images?.large?.replace("http://", "https://")
                 ?: subject.images?.common?.replace("http://", "https://")
@@ -1310,6 +1364,7 @@ private fun infoboxValue(value: JsonElement): String = when (value) {
 
 /**
  * 全屏封面查看器：上半放大封面（长按保存到相册），下半滚动显示条目 infobox 详情。
+ * 详情列表滚到顶后继续下拉会跟手拖出整层，松手（或拖过阈值）关闭并缩回封面位置。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1321,8 +1376,44 @@ private fun SubjectImageViewer(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
     var saving by remember { mutableStateOf(false) }
     var pendingSave by remember { mutableStateOf(false) }
+
+    // 下拉关闭手势：列表在顶时接管下拉位移，超过阈值直接关，未过阈值松手回弹
+    val dismissThreshold = remember { with(density) { 170.dp.toPx() } }
+    var dragY by remember { mutableFloatStateOf(0f) }
+    val bounce = remember { Animatable(0f) }
+    val detailsScroll = rememberScrollState()
+    val dragConnection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val dy = available.y
+                val current = dragY
+                // 列表已到顶仍往下拉，或正处于拖出状态时，位移由本层吸收
+                val takeOver = (dy > 0 && detailsScroll.value == 0) || current > 0f
+                if (!takeOver) return Offset.Zero
+                val next = (current + dy).coerceAtLeast(0f)
+                dragY = next
+                if (next > dismissThreshold) onDismiss()
+                return Offset(0f, next - current)
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                val current = dragY
+                if (current > 0f) {
+                    if (current > dismissThreshold) {
+                        onDismiss()
+                    } else {
+                        bounce.snapTo(current)
+                        dragY = 0f
+                        bounce.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow))
+                    }
+                }
+                return Velocity.Zero
+            }
+        }
+    }
 
     val doSave = {
         if (!saving) {
@@ -1360,15 +1451,15 @@ private fun SubjectImageViewer(
         Unit
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .graphicsLayer {
+                translationY = if (bounce.isRunning || bounce.value != 0f) bounce.value else dragY
+                alpha = 1f - (maxOf(bounce.value, dragY) / (dismissThreshold * 1.6f)).coerceIn(0f, 0.7f)
+            }
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1409,7 +1500,7 @@ private fun SubjectImageViewer(
                     CircularProgressIndicator(modifier = Modifier.size(28.dp), color = Color.White)
                 } else {
                     Text(
-                        text = "长按图片可保存",
+                        text = "长按图片可保存 · 详情滑到顶部后继续下拉可关闭",
                         style = MaterialTheme.typography.labelSmall,
                         color = Color.White.copy(alpha = 0.5f),
                         modifier = Modifier
@@ -1424,7 +1515,8 @@ private fun SubjectImageViewer(
                     .fillMaxWidth()
                     .weight(0.55f)
                     .background(Color(0xFF121212))
-                    .verticalScroll(rememberScrollState())
+                    .nestedScroll(dragConnection)
+                    .verticalScroll(detailsScroll)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -1444,22 +1536,37 @@ private fun SubjectImageViewer(
                 infobox.forEach { item ->
                     val value = infoboxValue(item.value)
                     if (value.isEmpty()) return@forEach
-                    val isUrl = value.startsWith("http://") || value.startsWith("https://")
+                    val url = asBrowsableUrl(value)
                     Text(
                         text = buildAnnotatedString {
                             withStyle(SpanStyle(color = Color(0xFF9E9E9E), fontWeight = FontWeight.SemiBold)) {
                                 append("${item.key}  ")
                             }
-                            append(value)
+                            if (url != null) {
+                                withStyle(SpanStyle(color = Color(0xFF7FB3FF), textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)) {
+                                    append(value)
+                                }
+                            } else {
+                                append(value)
+                            }
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.White,
-                        modifier = if (isUrl) Modifier.clickable { openInBrowser(context, value) } else Modifier
+                        modifier = if (url != null) Modifier.clickable { openInBrowser(context, url) } else Modifier
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }
         }
+}
+
+/** infobox 值可跳转时返回补全 scheme 的 URL；完整 http(s) 链接或裸域名均识别 */
+private fun asBrowsableUrl(value: String): String? {
+    val trimmed = value.trim()
+    return when {
+        trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
+        Regex("""^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}(/\S*)?$""").matches(trimmed) -> "https://$trimmed"
+        else -> null
     }
 }
 
@@ -1488,14 +1595,71 @@ private suspend fun saveImageToGallery(context: Context, url: String): String = 
     "Pictures/ywylite/$fileName"
 }
 
-/** 角色介绍：头像 + 名字 + 关系（主角/配角）+ 声优；默认显示前 3 个，可展开 */
+/** 角色介绍：横向滑动卡片（方形头像 + 名字 + 关系/声优），点击在浏览器打开角色页 */
 @Composable
 private fun CharactersSection(characters: List<CharacterItem>) {
-    var expanded by remember { mutableStateOf(false) }
-    // 超长条目（如航海王）角色数以千计，展开时截断防止一次渲染卡顿
-    val maxShown = 100
-    val shown = if (expanded) characters.take(maxShown) else characters.take(3)
+    val context = LocalContext.current
+    Column {
+        Text("角色介绍 (${characters.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(6.dp))
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(vertical = 2.dp)
+        ) {
+            items(characters, key = { it.id }) { character ->
+                val avatar = character.images?.medium?.replace("http://", "https://")
+                    ?: character.images?.small?.replace("http://", "https://") ?: ""
+                Column(
+                    modifier = Modifier
+                        .width(64.dp)
+                        .clickable { openInBrowser(context, "https://bgm.tv/character/${character.id}") },
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (avatar.isNotEmpty()) {
+                        AsyncImage(
+                            model = avatar,
+                            contentDescription = character.name,
+                            modifier = Modifier
+                                .size(64.dp)
+                                .clip(RoundedCornerShape(6.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = character.name,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    val subInfo = buildList {
+                        if (character.relation.isNotEmpty()) add(character.relation)
+                        character.actors.firstOrNull()?.let { add("CV ${it.name}") }
+                    }
+                    if (subInfo.isNotEmpty()) {
+                        Text(
+                            text = subInfo.joinToString(" · "),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
 
+/** 关联条目：默认折叠只显示标题行，展开后为横向滑动的大图卡片，点击跳转条目详情 */
+@Composable
+private fun RelatedSection(
+    relatedSubjects: List<RelatedSubject>,
+    onSubjectClick: (Int) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
     Column {
         Row(
             modifier = Modifier
@@ -1504,108 +1668,55 @@ private fun CharactersSection(characters: List<CharacterItem>) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("角色介绍 (${characters.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            if (characters.size > 3) {
-                Text(
-                    text = if (expanded) "收起" else "展开",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
+            Text("关联条目 (${relatedSubjects.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                if (expanded) "收起" else "展开",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary
+            )
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            shown.forEach { character ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    val avatar = character.images?.medium?.replace("http://", "https://")
-                        ?: character.images?.small?.replace("http://", "https://") ?: ""
-                    if (avatar.isNotEmpty()) {
+        if (expanded) {
+            Spacer(modifier = Modifier.height(6.dp))
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(vertical = 2.dp)
+            ) {
+                items(relatedSubjects, key = { it.id }) { related ->
+                    val cover = related.images?.common?.replace("http://", "https://")
+                        ?: related.images?.medium?.replace("http://", "https://") ?: ""
+                    Column(
+                        modifier = Modifier
+                            .width(96.dp)
+                            .clickable { onSubjectClick(related.id) }
+                    ) {
                         AsyncImage(
-                            model = avatar,
-                            contentDescription = null,
+                            model = cover,
+                            contentDescription = related.nameCn.ifEmpty { related.name },
                             modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape),
+                                .size(96.dp, 128.dp)
+                                .clip(RoundedCornerShape(6.dp)),
                             contentScale = ContentScale.Crop
                         )
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = character.name,
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
+                            text = related.nameCn.ifEmpty { related.name },
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            if (character.relation.isNotEmpty()) {
-                                Text(
-                                    text = character.relation,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            character.actors.firstOrNull()?.let { actor ->
-                                Text(
-                                    text = "CV ${actor.name}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                        if (related.relation.isNotEmpty()) {
+                            Text(
+                                text = related.relation,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 9.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
             }
-            if (expanded && characters.size > maxShown) {
-                Text(
-                    "共 ${characters.size} 个角色，仅显示前 $maxShown 个",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RelatedSection(
-    relatedSubjects: List<RelatedSubject>,
-    onSubjectClick: (Int) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text("关联条目 (${relatedSubjects.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Text(if (expanded) "收起" else "展开", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-    }
-    if (expanded) {
-        relatedSubjects.forEach { related ->
-            ListItem(
-                leadingContent = {
-                    val thumb = related.images?.common?.replace("http://", "https://")
-                        ?: related.images?.medium?.replace("http://", "https://") ?: ""
-                    if (thumb.isNotEmpty()) {
-                        AsyncImage(
-                            model = thumb,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(RoundedCornerShape(4.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-                },
-                headlineContent = { Text(related.nameCn.ifEmpty { related.name }, style = MaterialTheme.typography.bodySmall) },
-                supportingContent = { Text(related.relation, style = MaterialTheme.typography.labelSmall) },
-                modifier = Modifier.clickable { onSubjectClick(related.id) }
-            )
         }
     }
 }
