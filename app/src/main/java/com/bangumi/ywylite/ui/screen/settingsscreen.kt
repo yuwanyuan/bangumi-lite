@@ -1,4 +1,4 @@
-﻿package com.bangumi.ywylite.ui.screen
+package com.bangumi.ywylite.ui.screen
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.ui.component.openInBrowser
 import android.content.Context
+import android.os.Build
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 
@@ -34,6 +35,7 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val darkMode by app.settings.darkMode.collectAsState(initial = "system")
+    val dynamicColor by app.settings.dynamicColor.collectAsState(initial = false)
     var showDarkModeDialog by remember { mutableStateOf(false) }
 
     // 官方 API / Web 端域名切换
@@ -191,6 +193,15 @@ fun SettingsScreen(
                     },
                     onClick = { showDarkModeDialog = true }
                 )
+                // 动态取色仅 Android 12+ 支持，低版本不展示
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    SettingsItem(
+                        icon = Icons.Default.Palette,
+                        title = "动态取色",
+                        subtitle = if (dynamicColor) "跟随壁纸取色" else "使用品牌粉色主题",
+                        onClick = { scope.launch { app.settings.saveDynamicColor(!dynamicColor) } }
+                    )
+                }
             }
 
             SettingsSection(title = "账号") {

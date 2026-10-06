@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 深色模式下的启动主题：原先只有 Light 版本，深色用户冷启动会先闪一下白屏 -->
+<resources>
+    <style name="Theme.BangumiLite" parent="android:Theme.Material.NoActionBar" />
+</resources>

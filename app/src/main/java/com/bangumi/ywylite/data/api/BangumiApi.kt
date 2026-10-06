@@ -1,5 +1,6 @@
 package com.bangumi.ywylite.data.api
 
+import android.content.Context
 import com.bangumi.ywylite.data.model.*
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -11,10 +12,16 @@ import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Authenticator
+import okhttp3.Cache
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.Credentials
@@ -22,12 +29,20 @@ import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Route as OkRoute
+import java.io.File
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
-class BangumiApi {
+/**
+ * OAuth 请求被服务端明确拒绝（4xx，如 refresh_token 失效的 invalid_grant），
+ * 登录态已不可恢复，调用方应清除本地登录态。
+ */
+class OAuthTokenRejectedException(message: String) : IllegalStateException(message)
+
+class BangumiApi(private val context: Context) {
 
     private val typePaths = mapOf(
         1 to "book",
@@ -53,6 +68,32 @@ class BangumiApi {
         coerceInputValues = true
         isLenient = true
     }
+
+    companion object {
+        /** 全局默认 UA：bgm.tv 要求第三方客户端携带可识别的 User-Agent（docs/bangumi-api.md） */
+        private const val USER_AGENT = "BGMLite/1.2 (Android; +https://github.com/yuwanyuan/bangumi-lite)"
+        private const val NETWORK_CACHE_DIR = "network_cache"
+        private const val NETWORK_CACHE_SIZE = 20L * 1024 * 1024
+    }
+
+    /**
+     * 全部 Ktor 客户端共享的 OkHttp 基座（连接池/缓存复用）。
+     * - 统一注入默认 User-Agent（请求自带 UA 时不覆盖）
+     * - 启用 HTTP 缓存：此前未配置 Cache，缓存设置页里 network_cache 恒为 0
+     * rebuildClients 用 newBuilder() 派生新客户端，保证 4 个客户端共用同一份缓存
+     * （OkHttp 不允许两个 Cache 实例指向同一目录，会写坏日志）。
+     */
+    private val baseOkHttp: OkHttpClient = OkHttpClient.Builder()
+        .cache(Cache(File(context.cacheDir, NETWORK_CACHE_DIR), NETWORK_CACHE_SIZE))
+        .addInterceptor { chain ->
+            val request = chain.request()
+            if (request.header("User-Agent") != null) {
+                chain.proceed(request)
+            } else {
+                chain.proceed(request.newBuilder().header("User-Agent", USER_AGENT).build())
+            }
+        }
+        .build()
 
     private var currentProxyEnabled = false
     private var currentProxyType = "HTTP"
@@ -98,7 +139,8 @@ class BangumiApi {
         throwOnError: Boolean = false
     ): HttpClient {
         val proxyConfig = buildProxyConfig()
-        val okHttpBuilder = OkHttpClient.Builder()
+        // 从共享基座派生（连接池/缓存/UA 拦截器全部继承），只叠加本客户端的差异配置
+        val okHttpBuilder = baseOkHttp.newBuilder()
         if (withCookies) {
             okHttpBuilder.cookieJar(webCookieJar)
         }
@@ -212,9 +254,19 @@ class BangumiApi {
      * 用于设置页 API / Web 地址的绿/红状态显示。
      */
     suspend fun pingHost(url: String): Boolean = withTimeout(6000) {
-        runCatching {
+        try {
             webClient.get(url).status.value < 500
-        }.getOrDefault(false)
+        } catch (e: CancellationException) {
+            // 协程取消必须向上传播，否则页面切换/弹窗关闭时吞掉取消信号
+            throw e
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** 退出登录：清掉 bgm.tv 网页会话 Cookie，避免残留上个账号的身份 */
+    fun clearWebSession() {
+        webCookieStore.clear()
     }
 
     // ------------------------------------------------------------------
@@ -301,31 +353,66 @@ class BangumiApi {
         return Regex("""[?&]code=([0-9a-zA-Z]+)""").find(url)?.groupValues?.get(1)
     }
 
-    private suspend fun exchangeOAuthCode(code: String): OAuthToken {
-        return webClient.post("/oauth/access_token") {
-            contentType(ContentType.Application.FormUrlEncoded)
-            setBody(FormDataContent(parameters {
-                append("grant_type", "authorization_code")
-                append("client_id", oauthAppId)
-                append("client_secret", oauthAppSecret)
-                append("code", code)
-                append("redirect_uri", oauthRedirectUri)
-            }))
-        }.body()
-    }
+    private suspend fun exchangeOAuthCode(code: String): OAuthToken =
+        postOAuthToken(
+            listOf(
+                "grant_type" to "authorization_code",
+                "client_id" to oauthAppId,
+                "client_secret" to oauthAppSecret,
+                "code" to code,
+                "redirect_uri" to oauthRedirectUri
+            )
+        )
 
     /** 用 refresh_token 换新的 access_token（每次刷新同时轮换 refresh_token） */
-    suspend fun refreshAccessToken(refreshToken: String): OAuthToken {
-        return webClient.post("/oauth/access_token") {
+    suspend fun refreshAccessToken(refreshToken: String): OAuthToken =
+        postOAuthToken(
+            listOf(
+                "grant_type" to "refresh_token",
+                "client_id" to oauthAppId,
+                "client_secret" to oauthAppSecret,
+                "refresh_token" to refreshToken
+            )
+        )
+
+    /**
+     * 统一的 /oauth/access_token 请求。
+     * webClient 不抛非 2xx（expectSuccess=false），此前错误 JSON 会被反序列化成
+     * 全默认值的空 OAuthToken 静默返回，导致「刷新成功」假象与 401 死循环——
+     * 这里显式校验状态码与字段，4xx 抛 [OAuthTokenRejectedException]，其余异常照抛。
+     */
+    private suspend fun postOAuthToken(params: List<Pair<String, String>>): OAuthToken {
+        val response = webClient.post("/oauth/access_token") {
             contentType(ContentType.Application.FormUrlEncoded)
             setBody(FormDataContent(parameters {
-                append("grant_type", "refresh_token")
-                append("client_id", oauthAppId)
-                append("client_secret", oauthAppSecret)
-                append("refresh_token", refreshToken)
+                params.forEach { (k, v) -> append(k, v) }
             }))
-        }.body()
+        }
+        val bodyText = response.bodyAsText()
+        if (!response.status.isSuccess()) {
+            val error = parseOAuthError(bodyText)
+            if (response.status.value in 400..499) {
+                throw OAuthTokenRejectedException(
+                    when (error) {
+                        "invalid_grant" -> "授权已失效，请重新登录"
+                        "invalid_client" -> "应用认证失败"
+                        else -> error ?: "授权失败（HTTP ${response.status.value}）"
+                    }
+                )
+            }
+            throw IllegalStateException("授权服务不可用（HTTP ${response.status.value}）")
+        }
+        val token = json.decodeFromString<OAuthToken>(bodyText)
+        if (token.accessToken.isBlank()) {
+            throw IllegalStateException("授权响应格式异常")
+        }
+        return token
     }
+
+    private fun parseOAuthError(body: String): String? = runCatching {
+        body.let { json.parseToJsonElement(it) }
+            .jsonObject["error"]?.jsonPrimitive?.content
+    }.getOrNull()
 
     private fun HttpRequestBuilder.withAuth() {
         accessToken?.let { token ->
@@ -496,6 +583,25 @@ class BangumiApi {
         }.body()
     }
 
+    /**
+     * 拉取条目全部章节。v0 单页上限 100，此前只取第一页，
+     * 长番（《海贼王》等 100+ 集）的章节列表会被截断，这里循环翻页取全量。
+     */
+    suspend fun getAllEpisodes(subjectId: Int): List<Episode> {
+        val all = mutableListOf<Episode>()
+        var offset = 0
+        // 上限 30 页（3000 集）防御性兜底，正常条目远达不到
+        repeat(30) {
+            val page = getEpisodes(subjectId, offset = offset, limit = 100)
+            if (page.data.isEmpty()) return all
+            all += page.data
+            offset += page.data.size
+            if (page.total > 0 && offset >= page.total) return all
+            if (page.data.size < 100) return all
+        }
+        return all
+    }
+
     suspend fun getMe(): User {
         return client.get("/v0/me") {
             withAuth()
@@ -555,8 +661,8 @@ class BangumiApi {
 
     /**
      * 获取用户对指定条目的收藏。
-     * 注意：v0 的读取端点必须带 username（`-` 路径只有 POST/PATCH，没有 GET）；
-     * 带 token 查询自己时可读私密收藏；返回 null 表示未收藏（404）。
+     * GET /v0/users/{username}/collections/{id}（username 传 `-` 即当前登录用户，
+     * 两者都可用）；带 token 查询自己时可读私密收藏；返回 null 表示未收藏（404）。
      */
     suspend fun getSubjectCollection(username: String, subjectId: Int, accessToken: String? = null): UserCollection? {
         return try {
@@ -613,6 +719,20 @@ class BangumiApi {
         }
         val paged = response.body<PagedEpisodeCollection>()
         return paged.data
+    }
+
+    /** 拉取全部章节观看状态（长番超过单页 200 上限时循环翻页，与 getAllEpisodes 对应） */
+    suspend fun getAllEpisodeCollections(subjectId: Int, accessToken: String? = null): List<EpisodeCollection> {
+        val all = mutableListOf<EpisodeCollection>()
+        var offset = 0
+        repeat(30) {
+            val page = getEpisodeCollection(subjectId, offset = offset, accessToken = accessToken)
+            if (page.isEmpty()) return all
+            all += page
+            offset += page.size
+            if (page.size < 200) return all
+        }
+        return all
     }
 
     suspend fun updateEpisodeStatus(
@@ -684,25 +804,29 @@ class BangumiApi {
             .trim()
     }
 
+    /**
+     * 网页标签浏览（HTML 解析）。按页号取数：bgm.tv 网页每页固定 24 条，
+     * 此前用 offset/limit(30) 换算页号，offset 按 30 递增而网页按 24 翻页，
+     * 导致「加载更多」反复拉同一页——改为直接以 page 为参数，页号与网页一一对应。
+     */
     suspend fun browseByTag(
         type: Int = 2,
         tag: String = "",
         sort: String = "",
-        offset: Int = 0,
-        limit: Int = 30
-    ): PagedSubject {
+        page: Int = 1
+    ): TagBrowsePage {
         val typePath = typePaths[type] ?: "anime"
         val encodedTag = java.net.URLEncoder.encode(tag, "UTF-8")
         val response = webClient.get("/${typePath}/tag/${encodedTag}") {
             url {
                 if (sort.isNotEmpty()) parameters.append("sort", sort)
-                parameters.append("page", ((offset / limit) + 1).toString())
+                parameters.append("page", page.coerceAtLeast(1).toString())
             }
         }
-        return parseSubjectsFromHtml(response.bodyAsText(), offset, limit)
+        return parseSubjectsFromHtml(response.bodyAsText(), page)
     }
 
-    private fun parseSubjectsFromHtml(html: String, offset: Int, limit: Int): PagedSubject {
+    private fun parseSubjectsFromHtml(html: String, page: Int = 1): TagBrowsePage {
         val subjects = mutableListOf<SubjectSmall>()
 
         val blockRegex = Regex("""<li id="item_(\d+)"[^>]*>([\s\S]*?)</li>""")
@@ -743,9 +867,8 @@ class BangumiApi {
         }
 
         val totalPages = Regex("""<span class="p_edge">\(&nbsp;\d+&nbsp;/&nbsp;(\d+)&nbsp;\)</span>""").find(html)?.groupValues?.get(1)?.toIntOrNull() ?: 1
-        val total = totalPages * subjects.size.coerceAtLeast(1)
 
-        return PagedSubject(total = total, offset = offset, limit = limit, data = subjects)
+        return TagBrowsePage(subjects = subjects, page = page, totalPages = totalPages)
     }
 
     suspend fun getUserTimeline(
@@ -914,34 +1037,6 @@ class BangumiApi {
         )
     }
 
-    suspend fun postSubjectComment(
-        subjectId: Int,
-        content: String
-    ): Boolean {
-        return try {
-            val html = webClient.get("/subject/${subjectId}") {
-                withAuth()
-            }.bodyAsText()
-            val formhash = Regex("""name="formhash"\s+value="([^"]+)"""").find(html)?.groupValues?.get(1)
-                ?: Regex(""""formhash":"([^"]+)"""").find(html)?.groupValues?.get(1)
-                ?: return false
-            webClient.post("/update/user/say?ajax=1") {
-                withAuth()
-                contentType(ContentType.Application.FormUrlEncoded)
-                setBody(buildString {
-                    append("say_input=")
-                    append(java.net.URLEncoder.encode(content, "UTF-8"))
-                    append("&formhash=")
-                    append(formhash)
-                    append("&submit=submit")
-                })
-            }
-            true
-        } catch (_: Exception) {
-            false
-        }
-    }
-
     suspend fun getTags(
         typePath: String = "anime",
     ): List<TagInfo> {
@@ -956,17 +1051,16 @@ class BangumiApi {
                 parameters.append("page", "1")
             }
         }
-        val result = parseSubjectsFromHtml(response.bodyAsText(), 0, 24)
+        val result = parseSubjectsFromHtml(response.bodyAsText())
 
-        if (result.data.isEmpty()) return 0
+        if (result.subjects.isEmpty()) return 0
 
-        val totalSubjects = result.total
-        val subjectsOnFirstPage = result.data.size
-        val episodesOnFirstPage = result.data.sumOf { it.eps }
+        val totalSubjects = result.totalPages * result.subjects.size
+        val episodesOnFirstPage = result.subjects.sumOf { it.eps }
 
-        if (subjectsOnFirstPage == 0 || episodesOnFirstPage == 0) return 0
+        if (episodesOnFirstPage == 0) return 0
 
-        val avgEpisodesPerSubject = episodesOnFirstPage.toDouble() / subjectsOnFirstPage
+        val avgEpisodesPerSubject = episodesOnFirstPage.toDouble() / result.subjects.size
         return (avgEpisodesPerSubject * totalSubjects).toInt()
     }
 
@@ -982,6 +1076,44 @@ class BangumiApi {
         }
         return tags
     }
+
+    /**
+     * 用给定代理参数做一次性连通性测试（走代理 GET api.bgm.tv/calendar），
+     * 完全不动全局客户端配置——此前「测试连接」直接 updateProxy 全局生效，
+     * 用户测完不保存退出，内存态与 DataStore 就此不一致。
+     * 返回耗时 ms，失败抛异常。
+     */
+    suspend fun testProxyConnection(type: String, host: String, port: Int, username: String, password: String): Long =
+        withContext(Dispatchers.IO) {
+            if (host.isBlank()) throw IllegalStateException("请先填写代理地址")
+            val proxyType = when (type.uppercase()) {
+                "SOCKS" -> Proxy.Type.SOCKS
+                else -> Proxy.Type.HTTP
+            }
+            val testClient = baseOkHttp.newBuilder()
+                .proxy(Proxy(proxyType, InetSocketAddress(host, port)))
+                .connectTimeout(8, TimeUnit.SECONDS)
+                .readTimeout(8, TimeUnit.SECONDS)
+                .apply {
+                    if (username.isNotEmpty()) {
+                        proxyAuthenticator(ProxyAuthenticator(username, password))
+                    }
+                }
+                .build()
+            val start = System.currentTimeMillis()
+            try {
+                testClient.newCall(Request.Builder().url("${apiBaseUrl}/calendar").build()).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        throw IllegalStateException("代理返回 HTTP ${response.code}")
+                    }
+                }
+            } finally {
+                // 缓存与基座共享不能关，只释放本客户端的连接资源
+                testClient.connectionPool.evictAll()
+                testClient.dispatcher.executorService.shutdown()
+            }
+            System.currentTimeMillis() - start
+        }
 }
 
 private class ProxyAuthenticator(
@@ -989,6 +1121,9 @@ private class ProxyAuthenticator(
     private val password: String
 ) : Authenticator {
     override fun authenticate(route: OkRoute?, response: okhttp3.Response): Request? {
+        // 上一次请求已带 Proxy-Authorization 仍收到 407 = 凭据错误；
+        // 返回 null 放弃，否则 OkHttp 会用同样的密码无限重试（约 20 轮后才失败）
+        if (response.request.header("Proxy-Authorization") != null) return null
         val challenge = response.challenges().firstOrNull() ?: return null
         val credential = Credentials.basic(username, password, charset("UTF-8"))
         return response.request.newBuilder()

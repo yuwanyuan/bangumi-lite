@@ -65,15 +65,6 @@ data class Rating(
 )
 
 @Serializable
-enum class CollectionType(val value: Int) {
-    Wish(1),
-    Done(2),
-    Doing(3),
-    OnHold(4),
-    Dropped(5)
-}
-
-@Serializable
 data class TagInfo(
     val name: String = "",
     val count: Int = 0,
@@ -167,7 +158,7 @@ data class CollectionCount(
 @Serializable
 data class UserCollection(
     @SerialName("subject_id")
-    val subject_id: Int = 0,
+    val subjectId: Int = 0,
     val subject: SubjectSmall? = null,
     val type: Int? = null,
     val comment: String = "",
@@ -231,19 +222,6 @@ data class PagedEpisodeCollection(
 )
 
 @Serializable
-enum class EpisodeStatus(val value: Int) {
-    NotWatched(0),
-    Watched(2)
-}
-
-@Serializable
-data class EpisodeStatusPayload(
-    @SerialName("episode_id")
-    val episodeId: List<Int>,
-    val type: EpisodeStatus
-)
-
-@Serializable
 data class EpisodeStatusUpdate(
     val type: Int = 2
 )
@@ -292,17 +270,6 @@ data class RelatedSubject(
 )
 
 @Serializable
-data class RelatedCharacter(
-    val id: Int = 0,
-    val name: String = "",
-    @SerialName("name_cn")
-    val nameCn: String = "",
-    val relation: String = "",
-    val actors: List<RelatedPerson> = emptyList(),
-    val images: PersonImages? = null
-)
-
-@Serializable
 data class RelatedPerson(
     val id: Int = 0,
     val name: String = "",
@@ -326,18 +293,12 @@ data class CommentUser(
 )
 
 @Serializable
-data class CommentAvatar(
-    val medium: String = "",
-    val large: String = "",
-    val small: String = ""
-)
-
-@Serializable
 data class CommentItem(
     val id: Int = 0,
     val user: CommentUser? = null,
     val comment: String = "",
     val rate: Int = 0,
+    @SerialName("updated_at")
     val updatedAt: Long = 0
 )
 
@@ -416,11 +377,9 @@ data class TimelineItem(
     val subjectRank: Int = 0
 )
 
-@Serializable
-enum class SubjectType(val value: Int) {
-    Anime(2),
-    Book(1),
-    Music(3),
-    Game(4),
-    Real(6)
-}
+/** 标签浏览页（网页版 /anime/tag/... HTML 解析），网页每页固定 24 条 */
+data class TagBrowsePage(
+    val subjects: List<SubjectSmall> = emptyList(),
+    val page: Int = 1,
+    val totalPages: Int = 1
+)

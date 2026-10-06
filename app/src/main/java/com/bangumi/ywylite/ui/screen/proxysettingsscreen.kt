@@ -1,4 +1,4 @@
-﻿package com.bangumi.ywylite.ui.screen
+package com.bangumi.ywylite.ui.screen
 
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
@@ -6,10 +6,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.Settings
@@ -103,7 +105,8 @@ fun ProxySettingsScreen(
                 onValueChange = { port = it },
                 label = { Text("代理端口") },
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
             )
 
             OutlinedTextField(
@@ -141,17 +144,30 @@ fun ProxySettingsScreen(
             ) {
                 OutlinedButton(
                     onClick = {
-                        scope.launch {
-                            testState = TestState.Testing
-                            try {
-                                val start = System.currentTimeMillis()
-                                app.api.updateProxy(enabled, type, host, port.toIntOrNull() ?: 7890, username, password)
-                                app.api.getCalendar()
-                                latency = System.currentTimeMillis() - start
-                                testState = TestState.Success
-                            } catch (e: Exception) {
-                                testResult = e.message ?: "未知错误"
+                        val portNum = port.toIntOrNull()?.takeIf { it in 1..65535 }
+                        when {
+                            host.isBlank() -> {
+                                testResult = "请先填写代理地址"
                                 testState = TestState.Failed
+                            }
+                            portNum == null -> {
+                                testResult = "端口无效（需 1-65535）"
+                                testState = TestState.Failed
+                            }
+                            else -> {
+                                scope.launch {
+                                    testState = TestState.Testing
+                                    try {
+                                        // 隔离测试：不改动全局代理配置。原先点"测试连接"
+                                        // 会直接 updateProxy 把整个应用切到待测代理，
+                                        // 且不落盘 DataStore，造成内存态与设置不一致
+                                        latency = app.api.testProxyConnection(type, host, portNum, username, password)
+                                        testState = TestState.Success
+                                    } catch (e: Exception) {
+                                        testResult = e.message ?: "未知错误"
+                                        testState = TestState.Failed
+                                    }
+                                }
                             }
                         }
                     },
@@ -163,19 +179,26 @@ fun ProxySettingsScreen(
 
                 Button(
                     onClick = {
-                        scope.launch {
-                            // NonCancellable：保存后立刻退出页面也不会中断写入，
-                            // 否则部分字段没落盘（输入看似丢失）且代理未生效
-                            withContext(NonCancellable) {
-                                settings.saveProxyEnabled(enabled)
-                                settings.saveProxyType(type)
-                                settings.saveProxyHost(host)
-                                settings.saveProxyPort(port.toIntOrNull() ?: 7890)
-                                settings.saveProxyUsername(username)
-                                settings.saveProxyPassword(password)
-                                app.api.updateProxy(enabled, type, host, port.toIntOrNull() ?: 7890, username, password)
+                        // 保存前校验端口：原先静默回落 7890，用户填错端口也毫无提示
+                        val portNum = port.toIntOrNull()?.takeIf { it in 1..65535 }
+                        if (portNum == null) {
+                            testResult = "端口无效（需 1-65535）"
+                            testState = TestState.Failed
+                        } else {
+                            scope.launch {
+                                // NonCancellable：保存后立刻退出页面也不会中断写入，
+                                // 否则部分字段没落盘（输入看似丢失）且代理未生效
+                                withContext(NonCancellable) {
+                                    settings.saveProxyEnabled(enabled)
+                                    settings.saveProxyType(type)
+                                    settings.saveProxyHost(host)
+                                    settings.saveProxyPort(portNum)
+                                    settings.saveProxyUsername(username)
+                                    settings.saveProxyPassword(password)
+                                    app.api.updateProxy(enabled, type, host, portNum, username, password)
+                                }
+                                Toast.makeText(context, "代理配置已保存", Toast.LENGTH_SHORT).show()
                             }
-                            Toast.makeText(context, "代理配置已保存", Toast.LENGTH_SHORT).show()
                         }
                     },
                     modifier = Modifier.weight(1f)

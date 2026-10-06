@@ -32,6 +32,8 @@ import com.bangumi.ywylite.data.model.User
 import com.bangumi.ywylite.ui.component.BangumiLoginPanel
 import com.bangumi.ywylite.ui.component.EmptyView
 import com.bangumi.ywylite.ui.component.LoadingView
+import io.ktor.client.plugins.ClientRequestException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 data class ProfileUiState(
@@ -76,19 +78,33 @@ fun ProfileScreen(
     LaunchedEffect(token) {
         if (token != null) {
             uiState = uiState.copy(isLoggedIn = true, loading = true, error = null)
-            try {
+            suspend fun loadUser() {
                 val user = app.api.getMe()
                 uiState = uiState.copy(loading = false, user = user)
                 app.settings.saveUsername(user.username)
-            } catch (e: Exception) {
-                val isAuthError = e.message?.contains("401") == true || e.message?.contains("Unauthorized") == true || e.message?.contains("token") == true
-                if (isAuthError) {
-                    app.settings.clearToken()
-                    app.api.updateToken(null)
+            }
+            try {
+                loadUser()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ClientRequestException) {
+                // 401 用类型判定（原先靠 e.message 匹配 "401"/"token" 字符串，误判率高）；
+                // 先尝试 refresh_token 续期，续期成功用新 token 重试一次
+                if (e.response.status.value == 401 && app.recoverFromUnauthorized(token)) {
+                    try {
+                        loadUser()
+                    } catch (retry: CancellationException) {
+                        throw retry
+                    } catch (retry: Exception) {
+                        uiState = uiState.copy(loading = false, error = retry.message)
+                    }
+                } else if (e.response.status.value == 401) {
                     uiState = uiState.copy(loading = false, isLoggedIn = false, user = null, error = "Token 已失效，请重新登录")
                 } else {
                     uiState = uiState.copy(loading = false, error = e.message)
                 }
+            } catch (e: Exception) {
+                uiState = uiState.copy(loading = false, error = e.message)
             }
         } else {
             uiState = uiState.copy(isLoggedIn = false, user = null, loading = false, error = null)

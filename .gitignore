@@ -18,6 +18,11 @@ keystore_base64.txt
 *.iws
 *.ipynb_checkpoints/
 
+# IDE / tool caches
+.kotlin/
+.claude/
+.vscode/
+
 # OS
 .DS_Store
 Thumbs.db

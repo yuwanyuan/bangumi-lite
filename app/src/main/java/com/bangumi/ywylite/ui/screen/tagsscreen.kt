@@ -1,4 +1,4 @@
-﻿package com.bangumi.ywylite.ui.screen
+package com.bangumi.ywylite.ui.screen
 
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bangumi.ywylite.data.api.BangumiApi
 import com.bangumi.ywylite.data.model.TagInfo
+import com.bangumi.ywylite.ui.component.ErrorView
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -33,8 +34,13 @@ data class TagsUiState(
     val loading: Boolean = true,
     val tags: List<TagInfo> = emptyList(),
     val error: String? = null,
-    val selectedType: Int = 2
+    val selectedType: Int = 2,
+    /** 重试信号：+1 触发主 LaunchedEffect 重新加载 */
+    val retryKey: Int = 0
 )
+
+/** 进程内标签缓存：标签列表基本不变，缓存后重进页面不再重发 200+ 个剧集数请求 */
+private val tagsCache = mutableMapOf<String, List<TagInfo>>()
 
 private val tagsSubjectTypes = listOf(
     2 to "动画",
@@ -64,17 +70,23 @@ fun TagsScreen(
     var uiState by remember { mutableStateOf(TagsUiState()) }
     var episodeFetchJob by remember { mutableStateOf<Job?>(null) }
 
-    val currentTypePath = tagsTypePaths[uiState.selectedType] ?: "anime"
-
-    LaunchedEffect(uiState.selectedType) {
+    LaunchedEffect(uiState.selectedType, uiState.retryKey) {
         episodeFetchJob?.cancel()
         uiState = uiState.copy(loading = true, error = null, tags = emptyList())
+        val path = tagsTypePaths[uiState.selectedType] ?: "anime"
+        // 命中缓存直接展示（含已补充的剧集数），避免每次进入都重发整批请求
+        tagsCache[path]?.let { cached ->
+            uiState = uiState.copy(loading = false, tags = cached)
+            return@LaunchedEffect
+        }
         try {
-            val tags = api.getTags(currentTypePath)
+            val tags = api.getTags(path)
             uiState = uiState.copy(loading = false, tags = tags)
+            tagsCache[path] = tags
 
             episodeFetchJob = scope.launch {
-                val path = tagsTypePaths[uiState.selectedType] ?: "anime"
+                val jobType = uiState.selectedType
+                var current = tags
                 tags.chunked(5).forEach { batch ->
                     ensureActive()
                     val results = batch.map { tag ->
@@ -90,15 +102,22 @@ fun TagsScreen(
                     }.awaitAll()
 
                     val episodeMap = results.toMap()
-                    uiState = uiState.copy(tags = uiState.tags.map { tag ->
+                    current = current.map { tag ->
                         episodeMap[tag.name]?.let { epCount ->
                             if (epCount > 0) tag.copy(episodeCount = epCount) else tag
                         } ?: tag
-                    })
+                    }
+                    // 切换类型后旧任务可能尚未完全取消，仅同类型才更新 UI（写缓存始终安全，按 path 隔离）
+                    if (uiState.selectedType == jobType) {
+                        uiState = uiState.copy(tags = current)
+                    }
+                    tagsCache[path] = current
 
                     delay(300)
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             uiState = uiState.copy(loading = false, error = e.message)
         }
@@ -158,11 +177,17 @@ fun TagsScreen(
                         CircularProgressIndicator()
                     }
                 }
-                uiState.error != null -> {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(uiState.error ?: "加载失败", color = MaterialTheme.colorScheme.error)
+                uiState.error != null -> ErrorView(
+                    message = uiState.error ?: "加载失败",
+                    onRetry = {
+                        uiState = uiState.copy(
+                            loading = true,
+                            error = null,
+                            tags = emptyList(),
+                            retryKey = uiState.retryKey + 1
+                        )
                     }
-                }
+                )
                 uiState.tags.isEmpty() -> {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("暂无数据", color = MaterialTheme.colorScheme.onSurfaceVariant)

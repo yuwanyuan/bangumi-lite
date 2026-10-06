@@ -1,4 +1,4 @@
-﻿package com.bangumi.ywylite.ui.screen
+package com.bangumi.ywylite.ui.screen
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -15,12 +15,15 @@ import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.CalendarDay
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
+import kotlinx.coroutines.CancellationException
 
 data class CalendarUiState(
     val loading: Boolean = true,
     val data: List<CalendarDay> = emptyList(),
     val error: String? = null,
-    val selectedDay: Int = 0
+    val selectedDay: Int = 0,
+    /** 重试信号：+1 触发 LaunchedEffect 重新加载（此前 key 恒为 Unit，重试按钮无效） */
+    val retryKey: Int = 0
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -32,7 +35,7 @@ fun CalendarScreen(
     val app = App.INSTANCE
     var uiState by remember { mutableStateOf(CalendarUiState()) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(uiState.retryKey) {
         uiState = uiState.copy(loading = true, error = null)
         try {
             val calendar = app.api.getCalendar()
@@ -48,6 +51,8 @@ fun CalendarScreen(
                 else -> 0
             }
             uiState = uiState.copy(loading = false, data = calendar, selectedDay = todayIndex)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             uiState = uiState.copy(loading = false, error = e.message)
         }
@@ -73,7 +78,11 @@ fun CalendarScreen(
             uiState.error != null -> ErrorView(
                 message = uiState.error ?: "加载失败",
                 onRetry = {
-                    uiState = uiState.copy(loading = true, error = null)
+                    uiState = uiState.copy(
+                        loading = true,
+                        error = null,
+                        retryKey = uiState.retryKey + 1
+                    )
                 },
                 modifier = Modifier.padding(padding)
             )

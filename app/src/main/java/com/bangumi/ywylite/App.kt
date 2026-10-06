@@ -6,14 +6,17 @@ import coil.ImageLoaderFactory
 import com.bangumi.ywylite.data.Settings
 import com.bangumi.ywylite.data.api.BangumiApi
 import com.bangumi.ywylite.data.api.ImageNetworkProxy
+import com.bangumi.ywylite.data.api.OAuthTokenRejectedException
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import java.io.IOException
 import java.net.ProxySelector
@@ -22,9 +25,15 @@ import java.net.SocketAddress
 
 class App : Application(), ImageLoaderFactory {
 
-    val api: BangumiApi by lazy { BangumiApi() }
+    val api: BangumiApi by lazy { BangumiApi(this) }
     val settings: Settings by lazy { Settings(this) }
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * 启动门闸：域名/代理等配置从 DataStore 恢复完成前为 false，
+     * UI 层等待它为 true 才渲染 NavHost，避免首页带着默认直连配置抢先发请求。
+     */
+    val appReady = MutableStateFlow(false)
 
     // 续期必须串行：refresh_token 每次刷新都会轮换，并发续期会让后到的请求用到已作废的旧值
     private val refreshMutex = Mutex()
@@ -49,10 +58,11 @@ class App : Application(), ImageLoaderFactory {
             if (token != null) {
                 api.updateToken(token)
                 api.refreshToken = settings.refreshToken.first()
-                // token 临期（不足 3 天）或已过期时启动即静默续期
+                // token 临期（不足 3 天）或已过期时启动即静默续期。
+                // 限时 8s：弱网下续期卡住不拖慢 appReady，失败留待 401 时再续
                 val expiresAt = settings.tokenExpiresAt.first()
                 if (!api.refreshToken.isNullOrBlank() && expiresAt in 1 until System.currentTimeMillis() + 3 * 24 * 3600 * 1000L) {
-                    refreshTokenIfNeeded(token)
+                    withTimeoutOrNull(8_000) { refreshTokenIfNeeded(token) }
                 }
             }
             // 域名与代理配置只在设置页保存时生效过，重启后必须恢复，否则会一直走默认直连
@@ -61,6 +71,7 @@ class App : Application(), ImageLoaderFactory {
             if (proxy.enabled) {
                 api.updateProxy(proxy.enabled, proxy.type, proxy.host, proxy.port, proxy.username, proxy.password)
             }
+            appReady.value = true
         }
     }
 
@@ -98,9 +109,7 @@ class App : Application(), ImageLoaderFactory {
         val refresh = settings.refreshToken.first()
         if (refresh.isBlank()) {
             // 手动 Token 没有续期能力，401 即失效
-            settings.clearToken()
-            api.updateToken(null)
-            api.refreshToken = null
+            clearLoginState()
             return@withLock
         }
         try {
@@ -111,15 +120,34 @@ class App : Application(), ImageLoaderFactory {
                 settings.saveTokenExpiresAt(System.currentTimeMillis() + newToken.expiresIn * 1000)
                 api.updateToken(newToken.accessToken)
             }
+        } catch (e: OAuthTokenRejectedException) {
+            // 服务端明确拒绝（invalid_grant 等）：登录态不可恢复，清除并同步网页会话
+            clearLoginState()
         } catch (e: ClientRequestException) {
             // refresh_token 本身已失效（400/401）才清除登录态；网络异常保留，下次再试
             if (e.response.status.value == 400 || e.response.status.value == 401) {
-                settings.clearToken()
-                api.updateToken(null)
-                api.refreshToken = null
+                clearLoginState()
             }
         } catch (_: Exception) {
         }
+    }
+
+    /** 清空本地登录态（DataStore + 内存 token + 网页会话 Cookie） */
+    private suspend fun clearLoginState() {
+        settings.clearToken()
+        api.updateToken(null)
+        api.refreshToken = null
+        api.clearWebSession()
+    }
+
+    /**
+     * 401 统一恢复入口：尝试用 refresh_token 续期。
+     * @return true 表示已恢复（api.accessToken 可用），false 表示登录态已失效被清除。
+     * 屏幕层捕获 401 后调用本方法，true 则重试原请求，false 则回到未登录态。
+     */
+    suspend fun recoverFromUnauthorized(failedToken: String?): Boolean {
+        refreshTokenIfNeeded(failedToken)
+        return !api.accessToken.isNullOrBlank()
     }
 
     companion object {

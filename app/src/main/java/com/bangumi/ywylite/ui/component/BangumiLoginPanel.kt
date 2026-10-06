@@ -35,6 +35,8 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.User
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -164,30 +166,44 @@ fun BangumiLoginPanel(onLoginSuccess: (User) -> Unit) {
                 scope.launch {
                     loading = true
                     error = null
+                    // 备份当前登录态：登录失败时完整回滚，避免留下"半登录"状态
+                    val prevToken = app.settings.accessToken.first()
+                    val prevRefresh = app.settings.refreshToken.first()
                     try {
                         val user = if (mode == 0) {
                             val t = tokenInput.text.trim()
                             if (t.isBlank()) throw IllegalStateException("请先填写 Token")
                             app.api.updateToken(t)
-                            app.settings.saveToken(t)
-                            // 手动 Token 不带 refresh_token，清掉旧值避免误续期
-                            app.settings.saveRefreshToken("")
-                            app.api.refreshToken = null
-                            app.settings.saveTokenExpiresAt(0L)
-                            app.api.getMe()
+                            // 先用 getMe 验证 token 有效再落盘：无效 token 不应残留到 DataStore
+                            app.api.getMe().also {
+                                app.settings.saveToken(t)
+                                // 手动 Token 不带 refresh_token，清掉旧值避免误续期
+                                app.settings.saveRefreshToken("")
+                                app.api.refreshToken = null
+                                app.settings.saveTokenExpiresAt(0L)
+                            }
                         } else {
                             val t = app.api.loginWithWebAccount(email.trim(), password, captcha.trim())
                             app.api.updateToken(t.accessToken)
-                            app.settings.saveToken(t.accessToken)
-                            app.settings.saveRefreshToken(t.refreshToken)
                             app.api.refreshToken = t.refreshToken
-                            app.settings.saveTokenExpiresAt(System.currentTimeMillis() + t.expiresIn * 1000)
-                            app.api.getMe()
+                            app.api.getMe().also {
+                                app.settings.saveToken(t.accessToken)
+                                app.settings.saveRefreshToken(t.refreshToken)
+                                app.settings.saveTokenExpiresAt(System.currentTimeMillis() + t.expiresIn * 1000)
+                            }
                         }
                         app.settings.saveUsername(user.username)
                         onLoginSuccess(user)
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
-                        app.api.updateToken(null)
+                        // 回滚：getMe 失败时内存 token 已被新值覆盖，恢复登录前状态
+                        app.api.updateToken(prevToken)
+                        app.api.refreshToken = prevRefresh.takeIf { it.isNotBlank() }
+                        if (mode == 1) {
+                            // 验证码是一次性的，无论失败在哪一步都刷新，否则重试必再失败
+                            captchaKey++
+                        }
                         error = "登录失败：${e.message ?: "未知错误"}"
                     }
                     loading = false

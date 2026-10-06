@@ -1,4 +1,4 @@
-﻿package com.bangumi.ywylite.data
+package com.bangumi.ywylite.data
 
 import android.content.Context
 import androidx.datastore.core.DataStore
@@ -88,6 +88,11 @@ class Settings(private val context: Context) {
         prefs[DARK_MODE_KEY] ?: "system"
     }
 
+    /** Android 12+ 动态取色开关（默认关闭，走品牌主题） */
+    val dynamicColor: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[DYNAMIC_COLOR_KEY] ?: false
+    }
+
     suspend fun saveToken(token: String) {
         context.dataStore.edit { prefs ->
             prefs[ACCESS_TOKEN_KEY] = token
@@ -175,6 +180,12 @@ class Settings(private val context: Context) {
         }
     }
 
+    suspend fun saveDynamicColor(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[DYNAMIC_COLOR_KEY] = enabled
+        }
+    }
+
     companion object {
         private val ACCESS_TOKEN_KEY = stringPreferencesKey("access_token")
         private val USERNAME_KEY = stringPreferencesKey("username")
@@ -189,5 +200,6 @@ class Settings(private val context: Context) {
     private val REFRESH_TOKEN_KEY = stringPreferencesKey("refresh_token")
     private val TOKEN_EXPIRES_AT_KEY = longPreferencesKey("token_expires_at")
     private val DARK_MODE_KEY = stringPreferencesKey("dark_mode")
+        private val DYNAMIC_COLOR_KEY = booleanPreferencesKey("dynamic_color")
     }
 }

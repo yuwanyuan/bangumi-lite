@@ -1,5 +1,7 @@
-﻿package com.bangumi.ywylite.ui
+package com.bangumi.ywylite.ui
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Explore
@@ -9,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -44,8 +47,17 @@ fun BangumiApp() {
 
     val app = App.INSTANCE
     val token by app.settings.accessToken.collectAsState(initial = null)
+    val ready by app.appReady.collectAsState()
 
     val showBottomBar = bottomNavItems.any { it.route == currentDestination?.route }
+
+    if (!ready) {
+        // 配置恢复（token/域名/代理）完成前不渲染页面，避免带默认直连配置抢先发请求
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
 
     Scaffold(
         bottomBar = {

@@ -1,4 +1,4 @@
-﻿package com.bangumi.ywylite.data
+package com.bangumi.ywylite.data
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
@@ -22,10 +22,11 @@ class CacheManager(private val context: Context) {
         private const val NETWORK_CACHE_DIR = "network_cache"
     }
 
-    fun getCacheInfo(): CacheInfo {
+    /** 遍历目录统计大小属磁盘 IO：原先在主线程执行，目录大时会卡 UI */
+    suspend fun getCacheInfo(): CacheInfo = withContext(Dispatchers.IO) {
         val imageCacheSize = calculateDirSize(getImageCacheDir())
         val networkCacheSize = calculateDirSize(getNetworkCacheDir())
-        return CacheInfo(
+        CacheInfo(
             totalSize = imageCacheSize + networkCacheSize,
             imageCacheSize = imageCacheSize,
             networkCacheSize = networkCacheSize
@@ -94,12 +95,11 @@ class CacheManager(private val context: Context) {
         return size
     }
 
+    /** 删除目录内的全部子项但保留根目录本身（OkHttp 缓存目录被整个删除后会静默失效） */
     private fun deleteDirContents(dir: File) {
         if (!dir.exists()) return
-        dir.walkTopDown().forEach { file ->
-            if (file.isFile) {
-                file.delete()
-            }
+        dir.listFiles()?.forEach { child ->
+            if (child.isDirectory) child.deleteRecursively() else child.delete()
         }
     }
 }

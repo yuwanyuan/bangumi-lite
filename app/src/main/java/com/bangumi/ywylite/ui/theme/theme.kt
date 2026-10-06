@@ -1,4 +1,4 @@
-﻿package com.bangumi.ywylite.ui.theme
+package com.bangumi.ywylite.ui.theme
 
 import android.app.Activity
 import android.os.Build
@@ -6,7 +6,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -36,10 +35,13 @@ private val DarkColors = darkColorScheme(
 @Composable
 fun BangumiTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
+    // 动态取色默认关闭：原先 Android 12+ 强制壁纸取色，品牌粉色主题被完全覆盖；
+    // 改为设置页开关，显式开启才生效（12 以下无此能力）
     val colorScheme = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context)
             else dynamicLightColorScheme(context)
@@ -52,7 +54,7 @@ fun BangumiTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.surface.toArgb()
+            // statusBarColor 已废弃（API 35）：enableEdgeToEdge 下系统按深浅色自动处理状态栏
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
         }
     }

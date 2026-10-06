@@ -1,4 +1,4 @@
-﻿package com.bangumi.ywylite.ui.screen
+package com.bangumi.ywylite.ui.screen
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -12,6 +12,8 @@ import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.Settings
 import com.bangumi.ywylite.ui.component.BangumiLoginPanel
+import io.ktor.client.plugins.ClientRequestException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -38,14 +40,20 @@ fun AccountSettingsScreen(
         if (isLoggedIn) {
             try {
                 user = app.api.getMe()
-            } catch (e: Exception) {
-                val isAuthError = e.message?.contains("401") == true || e.message?.contains("Unauthorized") == true
-                if (isAuthError) {
-                    app.settings.clearToken()
-                    app.api.updateToken(null)
-                    isLoggedIn = false
-                    user = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ClientRequestException) {
+                // 401 用类型判定（原先是 e.message 字符串匹配，误判率高）；
+                // 先尝试续期，续期成功用新 token 重试一次
+                if (e.response.status.value == 401) {
+                    if (app.recoverFromUnauthorized(token.ifBlank { null })) {
+                        user = runCatching { app.api.getMe() }.getOrNull()
+                    } else {
+                        isLoggedIn = false
+                        user = null
+                    }
                 }
+            } catch (_: Exception) {
             }
         }
     }
@@ -81,6 +89,10 @@ fun AccountSettingsScreen(
                         scope.launch {
                             app.settings.clearToken()
                             app.api.updateToken(null)
+                            // 登出要连 refresh_token 与网页会话一起清，
+                            // 否则残留的 Cookie/refresh_token 会让下次登录或请求行为异常
+                            app.api.refreshToken = null
+                            app.api.clearWebSession()
                             isLoggedIn = false
                             user = null
                         }

@@ -1,10 +1,11 @@
-﻿package com.bangumi.ywylite.ui.screen
+package com.bangumi.ywylite.ui.screen
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
@@ -19,6 +20,7 @@ import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.PagedUserCollection
 import com.bangumi.ywylite.data.model.UserCollection
 import com.bangumi.ywylite.ui.component.*
+import kotlinx.coroutines.CancellationException
 
 data class CollectionUiState(
     val loading: Boolean = true,
@@ -29,7 +31,13 @@ data class CollectionUiState(
     val showTypeFilter: Boolean = false,
     val offset: Int = 0,
     val hasMore: Boolean = false,
-    val total: Int = 0
+    val total: Int = 0,
+    /** 重试信号：+1 触发主 LaunchedEffect 重新加载（此前 keys 不含重试信号，按钮无效） */
+    val retryKey: Int = 0,
+    /** 加载更多重试信号 */
+    val loadMoreKey: Int = 0,
+    /** 加载更多失败标记：显示"点击重试"替代永久转圈 */
+    val loadMoreError: Boolean = false
 )
 
 private val collectionTypes = listOf(
@@ -61,18 +69,19 @@ fun CollectionScreen(
     val scope = rememberCoroutineScope()
     var uiState by remember { mutableStateOf(CollectionUiState()) }
     var username by remember { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
 
     LaunchedEffect(Unit) {
         app.settings.username.collect { name -> username = name }
     }
 
-    LaunchedEffect(username, uiState.selectedType, uiState.selectedSubjectType) {
+    LaunchedEffect(username, uiState.selectedType, uiState.selectedSubjectType, uiState.retryKey) {
         if (username == null) {
             uiState = uiState.copy(loading = false)
             return@LaunchedEffect
         }
         val currentUsername = username!!
-        uiState = uiState.copy(loading = true, offset = 0, error = null)
+        uiState = uiState.copy(loading = true, offset = 0, error = null, loadMoreError = false)
         try {
             val result = app.api.getUserCollections(
                 currentUsername,
@@ -87,8 +96,46 @@ fun CollectionScreen(
                 offset = result.data.size,
                 hasMore = result.data.size < result.total
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             uiState = uiState.copy(loading = false, error = e.message)
+        }
+    }
+
+    // 滚动接近底部时加载下一页。旧实现把 LaunchedEffect 放在 footer item 内且以
+    // offset 为 key：offset 变化 + footer 随数据追加重建都会重触发 → 连环拉完全部收藏
+    val nearEnd by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            uiState.hasMore && !uiState.loadMoreError &&
+                lastVisible >= info.totalItemsCount - 4
+        }
+    }
+    LaunchedEffect(nearEnd, uiState.offset, uiState.loadMoreKey) {
+        if (!nearEnd || username == null) return@LaunchedEffect
+        try {
+            val result = app.api.getUserCollections(
+                username!!,
+                subjectType = uiState.selectedSubjectType,
+                collectionType = uiState.selectedType,
+                offset = uiState.offset
+            )
+            uiState = if (result.data.isEmpty()) {
+                uiState.copy(hasMore = false, loadMoreError = false)
+            } else {
+                uiState.copy(
+                    data = (uiState.data + result.data).distinctBy { it.subjectId },
+                    offset = uiState.offset + result.data.size,
+                    hasMore = (uiState.offset + result.data.size) < uiState.total,
+                    loadMoreError = false
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            uiState = uiState.copy(loadMoreError = true)
         }
     }
 
@@ -171,16 +218,22 @@ fun CollectionScreen(
                     uiState.error != null -> ErrorView(
                         message = uiState.error ?: "加载失败",
                         onRetry = {
-                            uiState = uiState.copy(loading = true, error = null, offset = 0)
+                            uiState = uiState.copy(
+                                loading = true,
+                                error = null,
+                                offset = 0,
+                                retryKey = uiState.retryKey + 1
+                            )
                         }
                     )
                     uiState.data.isEmpty() -> EmptyView("暂无收藏")
                     else -> {
                         LazyColumn(
+                            state = listState,
                             contentPadding = PaddingValues(vertical = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            items(uiState.data, key = { it.subject_id }) { item ->
+                            items(uiState.data, key = { it.subjectId }) { item ->
                                 item.subject?.let { subject ->
                                     Column {
                                         SubjectListItem(
@@ -215,32 +268,27 @@ fun CollectionScreen(
                             }
                             if (uiState.hasMore) {
                                 item {
-                                    LaunchedEffect(uiState.offset) {
-                                        try {
-                                            val result = app.api.getUserCollections(
-                                                username!!,
-                                                subjectType = uiState.selectedSubjectType,
-                                                collectionType = uiState.selectedType,
-                                                offset = uiState.offset
-                                            )
-                                            uiState = if (result.data.isEmpty()) {
-                                                uiState.copy(hasMore = false)
-                                            } else {
-                                                uiState.copy(
-                                                    data = (uiState.data + result.data).distinctBy { it.subject_id },
-                                                    offset = uiState.offset + result.data.size,
-                                                    hasMore = (uiState.offset + result.data.size) < uiState.total
+                                    if (uiState.loadMoreError) {
+                                        TextButton(
+                                            onClick = {
+                                                uiState = uiState.copy(
+                                                    loadMoreError = false,
+                                                    loadMoreKey = uiState.loadMoreKey + 1
                                                 )
-                                            }
-                                        } catch (_: Exception) {}
-                                    }
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(16.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                            },
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text("加载失败，点击重试")
+                                        }
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(16.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                        }
                                     }
                                 }
                             }

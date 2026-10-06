@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Build
+import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -95,6 +96,8 @@ import com.bangumi.ywylite.ui.component.ErrorView
 import com.bangumi.ywylite.ui.component.LoadingView
 import com.bangumi.ywylite.ui.component.UserAges
 import com.bangumi.ywylite.ui.component.openInBrowser
+import io.ktor.client.plugins.ClientRequestException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -105,6 +108,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
+import java.io.File
 
 data class SubjectDetailUiState(
     val loading: Boolean = true,
@@ -175,17 +179,25 @@ fun SubjectDetailScreen(
         }
         var attempts = 0
         while (attempts < 4) {
-            val result = runCatching { app.api.getSubjectCollection(u, subjectId, t) }
-            if (result.isSuccess) {
-                // null = 服务端明确返回「未收藏」
-                uiState = uiState.copy(userCollection = result.getOrNull())
-                val epCollections = runCatching { app.api.getEpisodeCollection(subjectId, accessToken = t) }.getOrNull()
+            try {
+                // null = 服务端明确返回「未收藏」（404）
+                val collection = app.api.getSubjectCollection(u, subjectId, t)
+                uiState = uiState.copy(userCollection = collection)
+                val epCollections = runCatching { app.api.getAllEpisodeCollections(subjectId, accessToken = t) }.getOrNull()
                 if (epCollections != null) {
                     uiState = uiState.copy(
                         watchedEpisodes = epCollections.filter { it.type == 2 }.mapNotNull { it.episode?.id }.toSet()
                     )
                 }
                 return@sync
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ClientRequestException) {
+                // 4xx 是明确失败（无权限等），重试无意义
+                snackbarHostState.showSnackbar("收藏状态获取失败（HTTP ${e.response.status.value}）")
+                return@sync
+            } catch (_: Exception) {
+                // 网络异常，延迟后重试
             }
             attempts++
             delay(1000)
@@ -193,11 +205,14 @@ fun SubjectDetailScreen(
         snackbarHostState.showSnackbar("收藏状态获取失败，请检查网络后重试")
     }
 
-    LaunchedEffect(subjectId) {
+    // 全量加载详情与关联数据：首次进入与「重试」共用。
+    // 原先重试只重新拉 subject，章节/角色/信息盒仍是失败时的空值，页面残缺
+    val loadAll: suspend () -> Unit = {
         uiState = uiState.copy(loading = true, error = null)
         try {
             val subject = app.api.getSubject(subjectId)
-            val episodes = runCatching { app.api.getEpisodes(subjectId).data }.getOrDefault(emptyList())
+            // getAllEpisodes 内部循环翻页：长番（>100 集）此前只拿到第一页
+            val episodes = runCatching { app.api.getAllEpisodes(subjectId) }.getOrDefault(emptyList())
             val relatedSubjects = runCatching { app.api.getRelatedSubjects(subjectId) }.getOrDefault(emptyList())
             val characters = runCatching { app.api.getSubjectCharacters(subjectId) }.getOrDefault(emptyList())
             val webInfobox = runCatching { app.api.getSubjectWebInfobox(subjectId) }.getOrDefault(emptyList())
@@ -210,10 +225,14 @@ fun SubjectDetailScreen(
                 characters = characters,
                 webInfobox = webInfobox
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             uiState = uiState.copy(loading = false, error = e.message)
         }
     }
+
+    LaunchedEffect(subjectId) { loadAll() }
 
     LaunchedEffect(subjectId, token, username) { syncCollection() }
 
@@ -245,15 +264,7 @@ fun SubjectDetailScreen(
             ErrorView(
                 message = uiState.error ?: "加载失败",
                 onRetry = {
-                    scope.launch {
-                        uiState = uiState.copy(loading = true, error = null)
-                        try {
-                            val subject = app.api.getSubject(subjectId)
-                            uiState = uiState.copy(loading = false, subject = subject)
-                        } catch (e: Exception) {
-                            uiState = uiState.copy(loading = false, error = e.message)
-                        }
-                    }
+                    scope.launch { loadAll() }
                 },
                 modifier = Modifier.padding(padding)
             )
@@ -275,7 +286,7 @@ fun SubjectDetailScreen(
                                     tags = tags ?: uiState.userCollection?.tags ?: emptyList()
                                 )
                                     ?: UserCollection(
-                                        subject_id = subjectId,
+                                        subjectId = subjectId,
                                         type = type,
                                         rate = rate ?: 0,
                                         comment = comment ?: "",
@@ -319,18 +330,26 @@ fun SubjectDetailScreen(
                     val mainEps = uiState.episodes.filter { it.type == 0 }.sortedBy { it.sort }
                     val index = mainEps.indexOfFirst { it.id == episode.id }
                     val targetSort = if (index >= 0) index + 1 else episode.sort.toInt()
-                    val legacyOk = runCatching { app.api.markWatchedUpTo(subjectId, targetSort) }.isSuccess
-                    if (!legacyOk) {
-                        mainEps.take(index + 1).forEach { ep ->
-                            runCatching { app.api.updateEpisodeStatus(ep.id, 2) }
+                    var ok = runCatching { app.api.markWatchedUpTo(subjectId, targetSort) }.isSuccess
+                    if (!ok) {
+                        // legacy 失败退化为逐集标记（SP 等非正篇集不在 mainEps 内，单独标记该集）。
+                        // 统计实际成功数：原先无论成败都提示"已标记"，失败被当成成功
+                        val fallbackEps = if (index >= 0) mainEps.take(index + 1) else listOf(episode)
+                        val marked = fallbackEps.count { ep ->
+                            runCatching { app.api.updateEpisodeStatus(ep.id, 2) }.isSuccess
                         }
+                        ok = fallbackEps.isNotEmpty() && marked == fallbackEps.size
                     }
-                    runCatching { app.api.getEpisodeCollection(subjectId) }.getOrNull()?.let { list ->
+                    runCatching { app.api.getAllEpisodeCollections(subjectId) }.getOrNull()?.let { list ->
                         uiState = uiState.copy(
                             watchedEpisodes = list.filter { it.type == 2 }.mapNotNull { it.episode?.id }.toSet()
                         )
                     }
-                    snackbarHostState.showSnackbar("已标记看到第 ${targetSort} 话")
+                    if (ok) {
+                        snackbarHostState.showSnackbar("已标记看到第 ${targetSort} 话")
+                    } else {
+                        snackbarHostState.showSnackbar("标记失败，请重试")
+                    }
                 }
             },
             getEpisodeComments = { episodeId ->
@@ -1615,7 +1634,7 @@ private fun asBrowsableUrl(value: String): String? {
     }
 }
 
-/** 下载图片并写入系统相册（Pictures/ywylite），返回提示信息 */
+/** 下载图片并写入系统相册（Pictures/ywylite），返回保存路径 */
 private suspend fun saveImageToGallery(context: Context, url: String): String = withContext(Dispatchers.IO) {
     val request = ImageRequest.Builder(context)
         .data(url)
@@ -1625,19 +1644,55 @@ private suspend fun saveImageToGallery(context: Context, url: String): String = 
         ?: error("图片加载失败")
     val bitmap = drawable.toBitmap()
     val fileName = "bgm_${System.currentTimeMillis()}.jpg"
-    val values = ContentValues().apply {
-        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // Q+：MediaStore 托管写入。IS_PENDING 期间条目对外不可见，
+        // 失败要删掉残留条目，否则相册里会留下 0 字白图
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
             put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ywylite")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: error("无法写入相册")
+        try {
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+            } ?: error("无法写入相册")
+            context.contentResolver.update(
+                uri,
+                ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) },
+                null,
+                null
+            )
+            "Pictures/ywylite/$fileName"
+        } catch (e: Exception) {
+            runCatching { context.contentResolver.delete(uri, null, null) }
+            throw e
+        }
+    } else {
+        // API 26-28：必须自己写公共目录文件并把绝对路径登记进 DATA 列。
+        // 原先只插 MediaStore 不写文件，旧系统上保存"成功"但相册里没有图
+        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "ywylite")
+        if (!dir.exists() && !dir.mkdirs()) error("无法创建图片目录")
+        val file = File(dir, fileName)
+        try {
+            file.outputStream().use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+            }
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.DATA, file.absolutePath)
+            }
+            runCatching { context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) }
+            "Pictures/ywylite/$fileName"
+        } catch (e: Exception) {
+            file.delete()
+            throw e
         }
     }
-    val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-        ?: error("无法写入相册")
-    context.contentResolver.openOutputStream(uri)?.use { out ->
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
-    } ?: error("无法写入相册")
-    "Pictures/ywylite/$fileName"
 }
 
 /** 角色介绍：默认折叠；展开为横向滑动卡片（方形头像，顶部对齐裁切露出头部），点击打开角色页 */

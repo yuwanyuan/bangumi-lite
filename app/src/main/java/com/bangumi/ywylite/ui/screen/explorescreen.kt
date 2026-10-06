@@ -1,10 +1,11 @@
-﻿package com.bangumi.ywylite.ui.screen
+package com.bangumi.ywylite.ui.screen
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Search
@@ -18,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
+import kotlinx.coroutines.CancellationException
 
 data class ExploreUiState(
     val loading: Boolean = true,
@@ -27,7 +29,13 @@ data class ExploreUiState(
     val selectedSort: String = "heat",
     val offset: Int = 0,
     val hasMore: Boolean = false,
-    val total: Int = 0
+    val total: Int = 0,
+    /** 重试信号：+1 触发主 LaunchedEffect 重新加载（此前 keys 不变，重试按钮点了也白点） */
+    val retryKey: Int = 0,
+    /** 加载更多重试信号 */
+    val loadMoreKey: Int = 0,
+    /** 加载更多失败标记：显示"点击重试"替代永久转圈 */
+    val loadMoreError: Boolean = false
 )
 
 private val subjectTypes = listOf(
@@ -61,9 +69,51 @@ fun ExploreScreen(
 ) {
     val app = App.INSTANCE
     var uiState by remember { mutableStateOf(ExploreUiState()) }
+    val gridState = rememberLazyStaggeredGridState()
 
-    LaunchedEffect(uiState.selectedType, uiState.selectedSort) {
-        uiState = uiState.copy(loading = true, offset = 0, error = null)
+    // 滚动接近底部时加载下一页（替代 footer 内 LaunchedEffect：
+    // footer item 随数据追加会被 LazyGrid 重建，旧写法会连环拉完全部数据且失败静默）
+    val nearEnd by remember {
+        derivedStateOf {
+            val info = gridState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.maxOfOrNull { it.index } ?: -1
+            uiState.hasMore && lastVisible >= info.totalItemsCount - 4
+        }
+    }
+    LaunchedEffect(nearEnd, uiState.offset, uiState.loadMoreKey) {
+        if (!nearEnd) return@LaunchedEffect
+        try {
+            val result = if (uiState.selectedSort == "heat") {
+                app.api.searchSubjectsByHeat(
+                    type = uiState.selectedType,
+                    offset = uiState.offset
+                )
+            } else {
+                app.api.browseSubjects(
+                    type = uiState.selectedType,
+                    sort = uiState.selectedSort,
+                    offset = uiState.offset
+                )
+            }
+            uiState = if (result.data.isEmpty()) {
+                uiState.copy(hasMore = false, loadMoreError = false)
+            } else {
+                uiState.copy(
+                    data = (uiState.data + result.data).distinctBy { it.id },
+                    offset = uiState.offset + result.data.size,
+                    hasMore = (uiState.offset + result.data.size) < uiState.total,
+                    loadMoreError = false
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            uiState = uiState.copy(loadMoreError = true)
+        }
+    }
+
+    LaunchedEffect(uiState.selectedType, uiState.selectedSort, uiState.retryKey) {
+        uiState = uiState.copy(loading = true, offset = 0, error = null, loadMoreError = false)
         try {
             if (uiState.selectedSort == "heat") {
                 val result = app.api.searchSubjectsByHeat(type = uiState.selectedType, offset = 0)
@@ -88,6 +138,8 @@ fun ExploreScreen(
                     total = result.total
                 )
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             uiState = uiState.copy(loading = false, error = e.message)
         }
@@ -152,6 +204,7 @@ fun ExploreScreen(
             LazyVerticalStaggeredGrid(
                 // 自适应列宽：窄屏 3 列左右，平板自动多列
                 columns = StaggeredGridCells.Adaptive(110.dp),
+                state = gridState,
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalItemSpacing = 6.dp,
@@ -163,7 +216,12 @@ fun ExploreScreen(
                         ErrorView(
                             message = uiState.error ?: "加载失败",
                             onRetry = {
-                                uiState = uiState.copy(loading = true, error = null, offset = 0)
+                                uiState = uiState.copy(
+                                    loading = true,
+                                    error = null,
+                                    offset = 0,
+                                    retryKey = uiState.retryKey + 1
+                                )
                             }
                         )
                     }
@@ -179,32 +237,25 @@ fun ExploreScreen(
                         }
                         if (uiState.hasMore) {
                             item(span = StaggeredGridItemSpan.FullLine) {
-                                LaunchedEffect(Unit) {
-                                    try {
-                                        val result = if (uiState.selectedSort == "heat") {
-                                            app.api.searchSubjectsByHeat(
-                                                type = uiState.selectedType,
-                                                offset = uiState.offset
+                                if (uiState.loadMoreError) {
+                                    TextButton(
+                                        onClick = {
+                                            uiState = uiState.copy(
+                                                loadMoreError = false,
+                                                loadMoreKey = uiState.loadMoreKey + 1
                                             )
-                                        } else {
-                                            app.api.browseSubjects(
-                                                type = uiState.selectedType,
-                                                sort = uiState.selectedSort,
-                                                offset = uiState.offset
-                                            )
-                                        }
-                                        uiState = uiState.copy(
-                                            data = (uiState.data + result.data).distinctBy { it.id },
-                                            offset = uiState.offset + result.data.size,
-                                            hasMore = (uiState.offset + result.data.size) < uiState.total
-                                        )
-                                    } catch (_: Exception) {}
-                                }
-                                Box(
-                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text("加载失败，点击重试")
+                                    }
+                                } else {
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                    }
                                 }
                             }
                         }

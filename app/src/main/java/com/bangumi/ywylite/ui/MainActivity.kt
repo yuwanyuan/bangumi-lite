@@ -1,4 +1,4 @@
-﻿package com.bangumi.ywylite.ui
+package com.bangumi.ywylite.ui
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -17,12 +17,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             val app = App.INSTANCE
             val darkMode by app.settings.darkMode.collectAsState(initial = "system")
+            val dynamicColor by app.settings.dynamicColor.collectAsState(initial = false)
             val darkTheme = when (darkMode) {
                 "light" -> false
                 "dark" -> true
                 else -> isSystemInDarkTheme()
             }
-            BangumiTheme(darkTheme = darkTheme) {
+            BangumiTheme(darkTheme = darkTheme, dynamicColor = dynamicColor) {
                 BangumiApp()
             }
         }
