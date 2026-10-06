@@ -23,11 +23,6 @@ import com.bangumi.ywylite.data.api.BangumiApi
 import com.bangumi.ywylite.data.model.TagInfo
 import com.bangumi.ywylite.ui.component.ErrorView
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 data class TagsUiState(
@@ -39,7 +34,7 @@ data class TagsUiState(
     val retryKey: Int = 0
 )
 
-/** 进程内标签缓存：标签列表基本不变，缓存后重进页面不再重发 200+ 个剧集数请求 */
+/** 进程内标签缓存：标签列表基本不变，缓存后重进页面不再重发请求 */
 private val tagsCache = mutableMapOf<String, List<TagInfo>>()
 
 private val tagsSubjectTypes = listOf(
@@ -68,13 +63,11 @@ fun TagsScreen(
 ) {
     val scope = rememberCoroutineScope()
     var uiState by remember { mutableStateOf(TagsUiState()) }
-    var episodeFetchJob by remember { mutableStateOf<Job?>(null) }
 
     LaunchedEffect(uiState.selectedType, uiState.retryKey) {
-        episodeFetchJob?.cancel()
         uiState = uiState.copy(loading = true, error = null, tags = emptyList())
         val path = tagsTypePaths[uiState.selectedType] ?: "anime"
-        // 命中缓存直接展示（含已补充的剧集数），避免每次进入都重发整批请求
+        // 命中缓存直接展示，避免每次进入都重发请求
         tagsCache[path]?.let { cached ->
             uiState = uiState.copy(loading = false, tags = cached)
             return@LaunchedEffect
@@ -83,39 +76,6 @@ fun TagsScreen(
             val tags = api.getTags(path)
             uiState = uiState.copy(loading = false, tags = tags)
             tagsCache[path] = tags
-
-            episodeFetchJob = scope.launch {
-                val jobType = uiState.selectedType
-                var current = tags
-                tags.chunked(5).forEach { batch ->
-                    ensureActive()
-                    val results = batch.map { tag ->
-                        async {
-                            try {
-                                tag.name to api.getTagEpisodeCount(path, tag.name)
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (_: Exception) {
-                                tag.name to 0
-                            }
-                        }
-                    }.awaitAll()
-
-                    val episodeMap = results.toMap()
-                    current = current.map { tag ->
-                        episodeMap[tag.name]?.let { epCount ->
-                            if (epCount > 0) tag.copy(episodeCount = epCount) else tag
-                        } ?: tag
-                    }
-                    // 切换类型后旧任务可能尚未完全取消，仅同类型才更新 UI（写缓存始终安全，按 path 隔离）
-                    if (uiState.selectedType == jobType) {
-                        uiState = uiState.copy(tags = current)
-                    }
-                    tagsCache[path] = current
-
-                    delay(300)
-                }
-            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -237,14 +197,8 @@ private fun TagCard(tag: TagInfo, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center
             )
-            if (tag.episodeCount > 0) {
-                Text(
-                    text = formatTagCount(tag.episodeCount) + "集",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-            } else if (tag.count > 0) {
+            // 标签下条目数（网页 /{type}/tag 自带，稳定且一次请求全部拿到）
+            if (tag.count > 0) {
                 Text(
                     text = formatTagCount(tag.count),
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),

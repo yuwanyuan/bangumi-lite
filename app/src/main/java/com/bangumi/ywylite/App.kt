@@ -83,6 +83,15 @@ class App : Application(), ImageLoaderFactory {
         val client = OkHttpClient.Builder()
             // 封面一次并发十几张，默认每主机 5 并发会让队列排很久
             .dispatcher(okhttp3.Dispatcher().apply { maxRequestsPerHost = 12 })
+            // 与 API 客户端同一 UA：lain.bgm.tv 对 okhttp 默认 UA 可能区别对待
+            .addInterceptor { chain ->
+                val request = chain.request()
+                if (request.header("User-Agent") != null) {
+                    chain.proceed(request)
+                } else {
+                    chain.proceed(request.newBuilder().header("User-Agent", BangumiApi.USER_AGENT).build())
+                }
+            }
             .proxySelector(object : ProxySelector() {
                 override fun select(uri: URI?): List<java.net.Proxy> =
                     ImageNetworkProxy.proxy?.let { listOf(it) } ?: listOf(java.net.Proxy.NO_PROXY)

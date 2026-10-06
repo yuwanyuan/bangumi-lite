@@ -71,7 +71,7 @@ class BangumiApi(private val context: Context) {
 
     companion object {
         /** 全局默认 UA：bgm.tv 要求第三方客户端携带可识别的 User-Agent（docs/bangumi-api.md） */
-        private const val USER_AGENT = "BGMLite/1.2 (Android; +https://github.com/yuwanyuan/bangumi-lite)"
+        const val USER_AGENT = "BGMLite/1.2 (Android; +https://github.com/yuwanyuan/bangumi-lite)"
         private const val NETWORK_CACHE_DIR = "network_cache"
         private const val NETWORK_CACHE_SIZE = 20L * 1024 * 1024
     }
@@ -1042,26 +1042,6 @@ class BangumiApi(private val context: Context) {
     ): List<TagInfo> {
         val response = webClient.get("/${typePath}/tag")
         return parseTagsFromHtml(response.bodyAsText())
-    }
-
-    suspend fun getTagEpisodeCount(typePath: String, tagName: String): Int {
-        val encodedTag = java.net.URLEncoder.encode(tagName, "UTF-8")
-        val response = webClient.get("/${typePath}/tag/${encodedTag}") {
-            url {
-                parameters.append("page", "1")
-            }
-        }
-        val result = parseSubjectsFromHtml(response.bodyAsText())
-
-        if (result.subjects.isEmpty()) return 0
-
-        val totalSubjects = result.totalPages * result.subjects.size
-        val episodesOnFirstPage = result.subjects.sumOf { it.eps }
-
-        if (episodesOnFirstPage == 0) return 0
-
-        val avgEpisodesPerSubject = episodesOnFirstPage.toDouble() / result.subjects.size
-        return (avgEpisodesPerSubject * totalSubjects).toInt()
     }
 
     private fun parseTagsFromHtml(html: String): List<TagInfo> {

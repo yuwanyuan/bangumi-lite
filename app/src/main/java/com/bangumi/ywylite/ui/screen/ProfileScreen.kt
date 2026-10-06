@@ -166,7 +166,7 @@ fun ProfileScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         AsyncImage(
-                            model = user.avatar?.medium ?: "",
+                            model = user.avatar?.medium?.replace("http://", "https://") ?: "",
                             contentDescription = "头像",
                             modifier = Modifier
                                 .size(56.dp)

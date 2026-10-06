@@ -1,4 +1,4 @@
-﻿package com.bangumi.ywylite.ui.component
+package com.bangumi.ywylite.ui.component
 
 import android.content.Context
 import android.content.Intent
@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,8 +47,15 @@ fun SubjectCard(
             AsyncImage(
                 model = imageUrl,
                 contentDescription = subject.nameCn.ifEmpty { subject.name },
-                modifier = Modifier.fillMaxWidth(),
-                contentScale = ContentScale.FillWidth
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // 瀑布流 item 高度约束为无穷：无纵横比时 AsyncImage 测量高度为 0，
+                    // Coil 拿不到有效尺寸不会发起请求，图片区域塌陷表现为“从未加载”。
+                    // 固定纵横比让首帧即有确定尺寸，加载请求立即发出
+                    .aspectRatio(5f / 7f),
+                contentScale = ContentScale.Crop,
+                placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
+                error = ColorPainter(MaterialTheme.colorScheme.surfaceVariant)
             )
             Column(modifier = Modifier.padding(8.dp)) {
                 Text(
