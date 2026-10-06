@@ -3,6 +3,8 @@ package com.bangumi.ywylite
 import android.app.Application
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import coil.disk.DiskCache
+import coil.memory.MemoryCache
 import com.bangumi.ywylite.data.Settings
 import com.bangumi.ywylite.data.api.BangumiApi
 import com.bangumi.ywylite.data.api.ImageNetworkProxy
@@ -76,8 +78,11 @@ class App : Application(), ImageLoaderFactory {
     }
 
     /**
-     * Coil 全局 ImageLoader：封面等图片域名可能同样需要代理，
-     * 用动态 ProxySelector 跟随 ImageNetworkProxy（与 API 客户端同步刷新）。
+     * Coil 全局 ImageLoader：
+     * - 代理：图片域名（lain.bgm.tv）同样需要走应用内代理，用动态 ProxySelector 跟随（与 API 客户端同步刷新）
+     * - 缓存：显式配置内存（25% RAM）与磁盘（256MB）两级缓存。磁盘目录沿用 cacheDir/image_cache，
+     *   与缓存管理页的「清理图片缓存」对应。图床自身带 Cache-Control: immutable(8天)，
+     *   URL 稳定后同图只下一次。
      */
     override fun newImageLoader(): ImageLoader {
         val client = OkHttpClient.Builder()
@@ -105,6 +110,17 @@ class App : Application(), ImageLoaderFactory {
             .build()
         return ImageLoader.Builder(this)
             .okHttpClient(client)
+            .memoryCache {
+                MemoryCache.Builder(this)
+                    .maxSizePercent(0.25)
+                    .build()
+            }
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(cacheDir.resolve("image_cache"))
+                    .maxSizeBytes(256L * 1024 * 1024)
+                    .build()
+            }
             .crossfade(true)
             .build()
     }

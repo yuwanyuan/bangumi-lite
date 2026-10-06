@@ -93,6 +93,7 @@ import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.*
 import com.bangumi.ywylite.ui.component.EmptyView
 import com.bangumi.ywylite.ui.component.ErrorView
+import com.bangumi.ywylite.ui.component.ImageUrls
 import com.bangumi.ywylite.ui.component.LoadingView
 import com.bangumi.ywylite.ui.component.openInBrowser
 import io.ktor.client.plugins.ClientRequestException
@@ -385,9 +386,11 @@ private fun SubjectDetailContent(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
-    val imageUrl = subject.images?.common?.replace("http://", "https://")
-        ?: subject.images?.medium?.replace("http://", "https://")
-        ?: subject.image.replace("http://", "https://")
+    // 正文头图 400（与列表卡片同档，缓存互通）；查看器另取 800 大图
+    val imageUrl = ImageUrls.cover(
+        subject.images?.common ?: subject.images?.medium ?: subject.image,
+        ImageUrls.GRID
+    )
 
     var showMenu by remember { mutableStateOf(false) }
     var showCommentsSheet by remember { mutableStateOf(false) }
@@ -658,9 +661,10 @@ private fun SubjectDetailContent(
         ) + fadeOut(tween(180))
     ) {
         SubjectImageViewer(
-            imageUrl = subject.images?.large?.replace("http://", "https://")
-                ?: subject.images?.common?.replace("http://", "https://")
-                ?: imageUrl,
+            imageUrl = ImageUrls.cover(
+                subject.images?.large ?: subject.images?.common ?: subject.image,
+                ImageUrls.DETAIL
+            ),
             title = subject.nameCn.ifEmpty { subject.name },
             infobox = uiState.webInfobox.ifEmpty { subject.infobox },
             onDismiss = { showImageViewer = false }
@@ -1720,8 +1724,11 @@ private fun CharactersSection(characters: List<CharacterItem>) {
                 contentPadding = PaddingValues(vertical = 2.dp)
             ) {
                 items(characters, key = { it.id }) { character ->
-                    val avatar = character.images?.medium?.replace("http://", "https://")
-                        ?: character.images?.small?.replace("http://", "https://") ?: ""
+                    // 角色立绘原图 1MB+，取 r/200 小图（约 17KB）；保持原比例顶部裁切露头
+                    val avatar = ImageUrls.character(
+                        character.images?.medium ?: character.images?.small,
+                        ImageUrls.THUMB
+                    )
                     Column(
                         modifier = Modifier
                             .width(64.dp)
@@ -1798,8 +1805,11 @@ private fun RelatedSection(
                 contentPadding = PaddingValues(vertical = 2.dp)
             ) {
                 items(relatedSubjects, key = { it.id }) { related ->
-                    val cover = related.images?.common?.replace("http://", "https://")
-                        ?: related.images?.medium?.replace("http://", "https://") ?: ""
+                    // 关联条目封面 96dp 宽，取 200 档；与列表卡片同档可复用缓存
+                    val cover = ImageUrls.cover(
+                        related.images?.common ?: related.images?.medium,
+                        ImageUrls.THUMB
+                    )
                     Column(
                         modifier = Modifier
                             .width(96.dp)
@@ -1949,7 +1959,7 @@ private fun SubjectCommentCard(
     ) {
         Column(modifier = Modifier.padding(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                val avatarUrl = comment.user?.avatar?.medium?.replace("http://", "https://") ?: ""
+                val avatarUrl = ImageUrls.avatar(comment.user?.avatar?.medium ?: comment.user?.avatar?.large)
                 if (avatarUrl.isNotEmpty()) {
                     AsyncImage(
                         model = avatarUrl,

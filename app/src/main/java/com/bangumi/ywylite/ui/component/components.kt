@@ -39,11 +39,12 @@ fun SubjectCard(
         modifier = modifier
     ) {
         Column {
-            val imageUrl = subject.images?.medium?.takeIf { it.isNotEmpty() }?.replace("http://", "https://")
-                ?: subject.image.takeIf { it.isNotEmpty() }?.replace("http://", "https://")
-                ?: subject.images?.large?.takeIf { it.isNotEmpty() }?.replace("http://", "https://")
-                ?: subject.images?.common?.takeIf { it.isNotEmpty() }?.replace("http://", "https://")
-                ?: ""
+            // 统一走 ImageUrls（协议归一 + 按尺寸取图）：不同界面算出同一地址，Coil 缓存才能命中
+            val imageUrl = ImageUrls.cover(
+                subject.images?.medium ?: subject.image
+                    ?: subject.images?.common ?: subject.images?.large,
+                ImageUrls.GRID
+            )
             AsyncImage(
                 model = imageUrl,
                 contentDescription = subject.nameCn.ifEmpty { subject.name },
@@ -117,11 +118,11 @@ fun SubjectListItem(
             }
         },
         leadingContent = {
-            val imageUrl = subject.images?.medium?.takeIf { it.isNotEmpty() }?.replace("http://", "https://")
-                ?: subject.image.takeIf { it.isNotEmpty() }?.replace("http://", "https://")
-                ?: subject.images?.large?.takeIf { it.isNotEmpty() }?.replace("http://", "https://")
-                ?: subject.images?.common?.takeIf { it.isNotEmpty() }?.replace("http://", "https://")
-                ?: ""
+            val imageUrl = ImageUrls.cover(
+                subject.images?.medium ?: subject.image
+                    ?: subject.images?.common ?: subject.images?.large,
+                ImageUrls.THUMB
+            )
             AsyncImage(
                 model = imageUrl,
                 contentDescription = null,

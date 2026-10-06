@@ -31,6 +31,7 @@ import com.bangumi.ywylite.data.model.TimelineItem
 import com.bangumi.ywylite.data.model.User
 import com.bangumi.ywylite.ui.component.BangumiLoginPanel
 import com.bangumi.ywylite.ui.component.EmptyView
+import com.bangumi.ywylite.ui.component.ImageUrls
 import com.bangumi.ywylite.ui.component.LoadingView
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CancellationException
@@ -166,7 +167,7 @@ fun ProfileScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         AsyncImage(
-                            model = user.avatar?.medium?.replace("http://", "https://") ?: "",
+                            model = ImageUrls.avatar(user.avatar?.medium ?: user.avatar?.large),
                             contentDescription = "头像",
                             modifier = Modifier
                                 .size(56.dp)
@@ -352,7 +353,7 @@ private fun TimelineItemRow(
             ) {
                 if (item.subjectImage.isNotEmpty()) {
                     AsyncImage(
-                        model = item.subjectImage,
+                        model = ImageUrls.cover(item.subjectImage, ImageUrls.THUMB),
                         contentDescription = null,
                         modifier = Modifier
                             .size(40.dp)
