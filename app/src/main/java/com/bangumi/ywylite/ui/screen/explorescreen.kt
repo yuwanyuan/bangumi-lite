@@ -17,6 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
+import com.bangumi.ywylite.data.api.BangumiApi
+import com.bangumi.ywylite.data.model.PagedSubject
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
 import kotlinx.coroutines.CancellationException
@@ -26,7 +28,8 @@ data class ExploreUiState(
     val data: List<SubjectSmall> = emptyList(),
     val error: String? = null,
     val selectedType: Int = 2,
-    val selectedSort: String = "heat",
+    // 取值与网页 browser 页的 sort 参数一致（rank/trends/collects/date）
+    val selectedSort: String = "rank",
     val offset: Int = 0,
     val hasMore: Boolean = false,
     val total: Int = 0,
@@ -54,10 +57,25 @@ val typePaths = mapOf(
     6 to "real"
 )
 
+// 与网页 bgm.tv/anime/browser 的排序项一一对应（值即网页的 sort 参数）
 private val sortOptions = listOf(
     "rank" to "排名",
-    "heat" to "热度"
+    "trends" to "热度",
+    "collects" to "收藏",
+    "date" to "日期"
 )
+
+/** 按排序值分发到对应接口：rank/date 走 v0 列表（官方支持），trends/collects 走搜索排序 */
+private suspend fun fetchBrowsePage(
+    api: BangumiApi,
+    type: Int,
+    sort: String,
+    offset: Int
+): PagedSubject = when (sort) {
+    "trends" -> api.browseSubjectsByTrend(type = type, offset = offset)
+    "collects" -> api.browseSubjectsByCollects(type = type, offset = offset)
+    else -> api.browseSubjects(type = type, sort = sort, offset = offset)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,18 +101,12 @@ fun ExploreScreen(
     LaunchedEffect(nearEnd, uiState.offset, uiState.loadMoreKey) {
         if (!nearEnd) return@LaunchedEffect
         try {
-            val result = if (uiState.selectedSort == "heat") {
-                app.api.searchSubjectsByHeat(
-                    type = uiState.selectedType,
-                    offset = uiState.offset
-                )
-            } else {
-                app.api.browseSubjects(
-                    type = uiState.selectedType,
-                    sort = uiState.selectedSort,
-                    offset = uiState.offset
-                )
-            }
+            val result = fetchBrowsePage(
+                api = app.api,
+                type = uiState.selectedType,
+                sort = uiState.selectedSort,
+                offset = uiState.offset
+            )
             uiState = if (result.data.isEmpty()) {
                 uiState.copy(hasMore = false, loadMoreError = false)
             } else {
@@ -115,29 +127,19 @@ fun ExploreScreen(
     LaunchedEffect(uiState.selectedType, uiState.selectedSort, uiState.retryKey) {
         uiState = uiState.copy(loading = true, offset = 0, error = null, loadMoreError = false)
         try {
-            if (uiState.selectedSort == "heat") {
-                val result = app.api.searchSubjectsByHeat(type = uiState.selectedType, offset = 0)
-                uiState = uiState.copy(
-                    loading = false,
-                    data = result.data,
-                    offset = result.data.size,
-                    hasMore = result.data.size < result.total,
-                    total = result.total
-                )
-            } else {
-                val result = app.api.browseSubjects(
-                    type = uiState.selectedType,
-                    sort = uiState.selectedSort,
-                    offset = 0
-                )
-                uiState = uiState.copy(
-                    loading = false,
-                    data = result.data,
-                    offset = result.data.size,
-                    hasMore = result.data.size < result.total,
-                    total = result.total
-                )
-            }
+            val result = fetchBrowsePage(
+                api = app.api,
+                type = uiState.selectedType,
+                sort = uiState.selectedSort,
+                offset = 0
+            )
+            uiState = uiState.copy(
+                loading = false,
+                data = result.data,
+                offset = result.data.size,
+                hasMore = result.data.size < result.total,
+                total = result.total
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

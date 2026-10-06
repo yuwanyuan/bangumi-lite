@@ -23,7 +23,8 @@ import com.bangumi.ywylite.data.api.BangumiApi
 import com.bangumi.ywylite.data.model.TagInfo
 import com.bangumi.ywylite.ui.component.ErrorView
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 
 data class TagsUiState(
     val loading: Boolean = true,
@@ -37,6 +38,8 @@ data class TagsUiState(
 /** 进程内标签缓存：标签列表基本不变，缓存后重进页面不再重发请求 */
 private val tagsCache = mutableMapOf<String, List<TagInfo>>()
 
+/** 标签真实条目数缓存：key = "typePath|标签名"。索引页给的数字是标注人数，不能直接展示 */
+private val tagSubjectCountCache = mutableMapOf<String, Int>()
 private val tagsSubjectTypes = listOf(
     2 to "动画",
     1 to "书籍",
@@ -61,25 +64,42 @@ fun TagsScreen(
     onBack: () -> Unit,
     onNavigateToTagBrowse: (String, String, Int) -> Unit
 ) {
-    val scope = rememberCoroutineScope()
     var uiState by remember { mutableStateOf(TagsUiState()) }
 
     LaunchedEffect(uiState.selectedType, uiState.retryKey) {
         uiState = uiState.copy(loading = true, error = null, tags = emptyList())
         val path = tagsTypePaths[uiState.selectedType] ?: "anime"
-        // 命中缓存直接展示，避免每次进入都重发请求
-        tagsCache[path]?.let { cached ->
-            uiState = uiState.copy(loading = false, tags = cached)
-            return@LaunchedEffect
-        }
-        try {
-            val tags = api.getTags(path)
-            uiState = uiState.copy(loading = false, tags = tags)
-            tagsCache[path] = tags
+        val type = uiState.selectedType
+        val base = try {
+            // 命中缓存直接展示，避免每次进入都重发请求
+            tagsCache[path] ?: api.getTags(path).also { tagsCache[path] = it }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             uiState = uiState.copy(loading = false, error = e.message)
+            return@LaunchedEffect
+        }
+        uiState = uiState.copy(
+            loading = false,
+            tags = base.map { it.copy(subjectCount = tagSubjectCountCache["$path|${it.name}"] ?: -1) }
+        )
+
+        // 真实条目数只能逐个标签查（v0 搜索一次一个 tag，约 0.5s / 3~8KB），
+        // 按 6 并发分批补齐、边取边显示；已缓存的直接跳过，重进页面几乎无需再请求
+        val pending = base.filter { tagSubjectCountCache["$path|${it.name}"] == null }
+        pending.chunked(6).forEach { batch ->
+            val results = batch.map { tag ->
+                async { tag.name to api.getTagSubjectCount(type, tag.name) }
+            }.awaitAll()
+            results.forEach { (name, count) -> if (count != null) tagSubjectCountCache["$path|$name"] = count }
+            // 切类型后旧任务可能尚未取消，仅同类型才更新 UI（缓存写入始终安全，按 path 隔离）
+            if (uiState.selectedType == type) {
+                uiState = uiState.copy(
+                    tags = uiState.tags.map { t ->
+                        tagSubjectCountCache["$path|${t.name}"]?.let { t.copy(subjectCount = it) } ?: t
+                    }
+                )
+            }
         }
     }
 
@@ -197,15 +217,14 @@ private fun TagCard(tag: TagInfo, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center
             )
-            // 标签下条目数（网页 /{type}/tag 自带，稳定且一次请求全部拿到）
-            if (tag.count > 0) {
-                Text(
-                    text = formatTagCount(tag.count),
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-            }
+            // 标签下的真实条目数（索引页给的数字是「标注人数」，量级完全不同，不能直接用）
+            val subjectCount = tag.subjectCount
+            Text(
+                text = if (subjectCount >= 0) formatTagCount(subjectCount) else "…",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }

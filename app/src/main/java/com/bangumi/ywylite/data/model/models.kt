@@ -67,8 +67,10 @@ data class Rating(
 @Serializable
 data class TagInfo(
     val name: String = "",
+    /** 标注人数：标签索引页给的原始数字，不是该标签下的条目数 */
     val count: Int = 0,
-    val episodeCount: Int = 0
+    /** 该标签下的真实条目数（与点进去看到的列表一致）；-1 = 尚未取到 */
+    val subjectCount: Int = -1
 )
 
 @Serializable
@@ -228,7 +230,11 @@ data class EpisodeStatusUpdate(
 
 @Serializable
 data class SearchFilter(
-    val type: List<Int>? = null
+    val type: List<Int>? = null,
+    /** 用户标签，多值之间为「且」；标签索引据此统计标签下的真实条目数 */
+    val tag: List<String>? = null,
+    /** 播出/发售日期窗口，如 [">=2026-07-01"]；多值之间为「且」。encodeDefaults=false，null 时不出现在请求体 */
+    val air_date: List<String>? = null
 )
 
 @Serializable

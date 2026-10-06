@@ -866,7 +866,18 @@ class BangumiApi(private val context: Context) {
             ))
         }
 
-        val totalPages = Regex("""<span class="p_edge">\(&nbsp;\d+&nbsp;/&nbsp;(\d+)&nbsp;\)</span>""").find(html)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+        // 网页只在页数较多时输出 p_edge 总数标记（小标签如「宫崎骏」4 页就没有），
+        // 缺失时从分页器里的最大页码推断，否则小标签会被误判成只有 1 页、后续页永远加载不出来
+        val pEdgePages = Regex("""<span class="p_edge">\(&nbsp;\d+&nbsp;/&nbsp;(\d+)&nbsp;\)</span>""")
+            .find(html)?.groupValues?.get(1)?.toIntOrNull()
+        val pagerMax = Regex("""<div class="page_inner">([\s\S]*?)</div>""").find(html)
+            ?.groupValues?.get(1)
+            ?.let { inner ->
+                Regex("""page=(\d+)""").findAll(inner)
+                    .mapNotNull { it.groupValues[1].toIntOrNull() }
+                    .maxOrNull()
+            }
+        val totalPages = maxOf(pEdgePages ?: 1, pagerMax ?: 1, page)
 
         return TagBrowsePage(subjects = subjects, page = page, totalPages = totalPages)
     }
@@ -994,19 +1005,47 @@ class BangumiApi(private val context: Context) {
     }
 
     /**
-     * 按热度浏览条目。
+     * 按收藏人数浏览（网页 browser?sort=collects）。
      *
-     * 不用 next.bgm.tv/p1/trending：该接口翻页不稳定——offset 会被服务端对齐到批次边界，
-     * 实测 type=4（游戏）每页只回 19/17/16/23 条且相邻页有重叠（offset=0 与 offset=19 重叠 6 条），
-     * 配合去重后列表越翻越“没东西”，表现为首页下滑加载不出内容。
-     *
-     * v0 搜索的 `sort=heat` + 空关键词正是热度排序（实测各类型每页稳定 20 条、相邻页零重叠），
+     * v0 搜索的 `sort=heat` 即收藏人数降序——官方 spec 对该值的注释就是「收藏人数」，
+     * 后端实现（bangumi/server internal/search/subject/handle.go）映射为 meilisearch 的 heat:desc。
+     * 空关键词即可拿到全量条目（实测各类型每页稳定 20 条、相邻页零重叠），
      * 且返回的 images 字段与其它接口同源（/r/{px}/pic/cover/l/ 形态），图片地址能直接复用缓存。
      */
-    suspend fun searchSubjectsByHeat(
+    suspend fun browseSubjectsByCollects(
         type: Int = 2,
         offset: Int = 0,
         limit: Int = 20
+    ): PagedSubject = searchSubjectsBySort(type, offset, limit, airDateFrom = null)
+
+    /**
+     * 按热度浏览（网页 browser?sort=trends，即「正在流行」：当季/近季新番按近期活跃度排在最前）。
+     *
+     * 官方 API 没有对应排序：
+     * - /v0/subjects 只接受 sort=rank/date（后端 browse.go 白名单）；
+     * - v0 搜索的 heat 是收藏总数（等于上面的收藏排序）；
+     * - next.bgm.tv/p1/trending/subjects 语义一致但 offset 被服务端对齐到批次边界
+     *   （实测游戏类每页只回 14/11/10 条且不稳定），且该域名部分网络不可达。
+     *
+     * 故用「近期窗口 + 收藏数排序」近似：限定 air_date 在最近 90 天内，
+     * 实测与 trending 接口返回的条目构成高度重合（均为当前/上一季新番与即将播出的作品）。
+     */
+    suspend fun browseSubjectsByTrend(
+        type: Int = 2,
+        offset: Int = 0,
+        limit: Int = 20
+    ): PagedSubject {
+        val windowStart = java.time.LocalDate.now().minusDays(90)
+            .format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE)
+        return searchSubjectsBySort(type, offset, limit, airDateFrom = windowStart)
+    }
+
+    /** v0 搜索按收藏数排序的浏览（heat=收藏人数），[airDateFrom] 非空时限定播出/发售日期下限 */
+    private suspend fun searchSubjectsBySort(
+        type: Int,
+        offset: Int,
+        limit: Int,
+        airDateFrom: String?
     ): PagedSubject {
         return client.post("/v0/search/subjects") {
             url {
@@ -1014,8 +1053,16 @@ class BangumiApi(private val context: Context) {
                 parameters.append("limit", limit.toString())
             }
             contentType(ContentType.Application.Json)
-            // 空关键词 + sort=heat = 按收藏人数排序的全部条目
-            setBody(SearchRequest(keyword = "", sort = "heat", filter = SearchFilter(listOf(type))))
+            setBody(
+                SearchRequest(
+                    keyword = "",
+                    sort = "heat",
+                    filter = SearchFilter(
+                        type = listOf(type),
+                        air_date = airDateFrom?.let { listOf(">=$it") }
+                    )
+                )
+            )
             withAuth()
         }.body()
     }
@@ -1025,6 +1072,36 @@ class BangumiApi(private val context: Context) {
     ): List<TagInfo> {
         val response = webClient.get("/${typePath}/tag")
         return parseTagsFromHtml(response.bodyAsText())
+    }
+
+    /**
+     * 标签索引页上的数字是「标注人数」（全站有多少人给条目打过这个标签），
+     * 与该标签下实际有多少条目（点进去列表能翻到的条数）完全不是一个量级——
+     * 例如「宫崎骏」标注人数 3.9 万、动画条目实际只有 62 条。
+     *
+     * 真实条目数只有 v0 搜索能算：空关键词 + filter.tag 时返回的 total 即该标签的条目数
+     * （实测动画 62 / 书籍 29 / 音乐 7 / 三次元 13，与网页标签页逐页翻出来的条数一致）。
+     * 单次请求约 0.4~1.2 秒、响应 3~8KB，100 个标签串行约 1 分钟——故只在标签索引页
+     * 按可见批次并发补齐，不做全量预取。
+     */
+    suspend fun getTagSubjectCount(type: Int, tag: String): Int? {
+        return runCatching {
+            client.post("/v0/search/subjects") {
+                url {
+                    parameters.append("limit", "1")
+                    parameters.append("offset", "0")
+                }
+                contentType(ContentType.Application.Json)
+                setBody(
+                    SearchRequest(
+                        keyword = "",
+                        sort = "rank",
+                        filter = SearchFilter(type = listOf(type), tag = listOf(tag))
+                    )
+                )
+                withAuth()
+            }.body<PagedSubject>().total
+        }.getOrNull()
     }
 
     private fun parseTagsFromHtml(html: String): List<TagInfo> {
