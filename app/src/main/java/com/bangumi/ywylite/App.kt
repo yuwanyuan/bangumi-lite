@@ -98,10 +98,17 @@ class App : Application(), ImageLoaderFactory {
                 }
             }
             .proxySelector(object : ProxySelector() {
+                // 应用内配了代理就用它；没配时回落到系统默认 ProxySelector（WiFi/系统级代理）。
+                // 注意：一旦 set 了 ProxySelector，OkHttp 自己的默认行为就被替换掉——
+                // 这里必须显式回落，否则「只在系统里配了代理」的设备上图片会全部直连超时。
                 override fun select(uri: URI?): List<java.net.Proxy> =
-                    ImageNetworkProxy.proxy?.let { listOf(it) } ?: listOf(java.net.Proxy.NO_PROXY)
+                    ImageNetworkProxy.proxy?.let { listOf(it) }
+                        ?: ProxySelector.getDefault()?.select(uri)
+                        ?: listOf(java.net.Proxy.NO_PROXY)
 
-                override fun connectFailed(uri: URI?, sa: SocketAddress?, ioe: IOException?) {}
+                override fun connectFailed(uri: URI?, sa: SocketAddress?, ioe: IOException?) {
+                    ProxySelector.getDefault()?.connectFailed(uri, sa, ioe)
+                }
             })
             .proxyAuthenticator { route, response ->
                 // 返回 null 表示不提供代理认证

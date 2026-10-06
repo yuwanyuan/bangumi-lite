@@ -993,48 +993,31 @@ class BangumiApi(private val context: Context) {
         }.body()
     }
 
+    /**
+     * 按热度浏览条目。
+     *
+     * 不用 next.bgm.tv/p1/trending：该接口翻页不稳定——offset 会被服务端对齐到批次边界，
+     * 实测 type=4（游戏）每页只回 19/17/16/23 条且相邻页有重叠（offset=0 与 offset=19 重叠 6 条），
+     * 配合去重后列表越翻越“没东西”，表现为首页下滑加载不出内容。
+     *
+     * v0 搜索的 `sort=heat` + 空关键词正是热度排序（实测各类型每页稳定 20 条、相邻页零重叠），
+     * 且返回的 images 字段与其它接口同源（/r/{px}/pic/cover/l/ 形态），图片地址能直接复用缓存。
+     */
     suspend fun searchSubjectsByHeat(
         type: Int = 2,
         offset: Int = 0,
-        limit: Int = 30
+        limit: Int = 20
     ): PagedSubject {
-        val response = nextClient.get("/p1/trending/subjects") {
+        return client.post("/v0/search/subjects") {
             url {
-                parameters.append("type", type.toString())
                 parameters.append("offset", offset.toString())
                 parameters.append("limit", limit.toString())
             }
-        }
-        val trendingResponse = json.decodeFromString<TrendingResponse>(response.bodyAsText())
-        val subjects = trendingResponse.data.mapNotNull { item ->
-            item.subject?.let { subject ->
-                SubjectSmall(
-                    id = subject.id,
-                    type = subject.type,
-                    name = subject.name,
-                    nameCn = subject.nameCn,
-                    image = subject.images?.medium ?: "",
-                    images = subject.images?.let { img ->
-                        SubjectImages(
-                            medium = img.medium,
-                            large = img.large,
-                            common = img.common,
-                            small = img.small,
-                            grid = ""
-                        )
-                    },
-                    rating = subject.rating?.let { rating ->
-                        Rating(score = rating.score, total = rating.total)
-                    }
-                )
-            }
-        }
-        return PagedSubject(
-            total = trendingResponse.total,
-            offset = offset,
-            limit = limit,
-            data = subjects
-        )
+            contentType(ContentType.Application.Json)
+            // 空关键词 + sort=heat = 按收藏人数排序的全部条目
+            setBody(SearchRequest(keyword = "", sort = "heat", filter = SearchFilter(listOf(type))))
+            withAuth()
+        }.body()
     }
 
     suspend fun getTags(

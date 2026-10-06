@@ -322,44 +322,6 @@ data class EpisodeComment(
 )
 
 @Serializable
-data class TrendingImages(
-    val medium: String = "",
-    val large: String = "",
-    val common: String = "",
-    val small: String = ""
-)
-
-@Serializable
-data class TrendingRating(
-    val score: Double = 0.0,
-    val total: Int = 0,
-    val count: List<Int> = emptyList()
-)
-
-@Serializable
-data class TrendingSubject(
-    val id: Int = 0,
-    val type: Int = 0,
-    val name: String = "",
-    @SerialName("name_cn")
-    val nameCn: String = "",
-    val images: TrendingImages? = null,
-    val rating: TrendingRating? = null
-)
-
-@Serializable
-data class TrendingItem(
-    val rank: Int = 0,
-    val subject: TrendingSubject? = null
-)
-
-@Serializable
-data class TrendingResponse(
-    val data: List<TrendingItem> = emptyList(),
-    val total: Int = 0
-)
-
-@Serializable
 data class TimelineItem(
     val id: Int = 0,
     val type: String = "",

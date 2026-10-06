@@ -41,19 +41,17 @@ object ImageUrls {
     }
 
     /**
-     * 用户头像：图床对 user/icon 没有 /r/{n}/ 前缀（实测 400），统一取中图 `/pic/user/m/`，
-     * 保证评论（24dp）、收藏列表、个人页（56dp）拿到的都是同一个地址。
+     * 用户头像：图床对 user/icon 不支持 /r/{n}/ 前缀（实测返回 400），
+     * 必须先剥掉尺寸前缀再统一取中图 `/pic/user/m/`，
+     * 保证评论（24dp）、收藏列表、个人页（56dp）拿到的都是同一个可用地址。
      */
     fun avatar(raw: String?): String {
         val src = normalize(raw) ?: return ""
         if (!src.contains("lain.bgm.tv")) return src
-        if (src.contains("/pic/user/")) {
-            return src.replace(Regex("""/pic/user/(g|s|m|c|l)/"""), "/pic/user/m/")
-        }
-        if (src.contains("/pic/icon/")) {
-            return src.replace(Regex("""/pic/icon/(g|s|m|c|l)/"""), "/pic/icon/m/")
-        }
-        return src
+        if (!src.contains("/pic/user/") && !src.contains("/pic/icon/")) return src
+        // API 里头像常带 /r/100/ 或 /r/200/ 前缀，对 user 图会 400，先去掉
+        val bare = src.replace(Regex("""^(https://lain\.bgm\.tv)/r/\d+/"""), "$1/")
+        return bare.replace(Regex("""/pic/(user|icon)/(g|s|m|c|l)/"""), "/pic/$1/m/")
     }
 
     /**
