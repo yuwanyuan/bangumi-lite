@@ -170,7 +170,8 @@ fun TagsScreen(
                 }
                 else -> {
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(4),
+                        // 自适应列宽：窄屏约 4 列，平板自动多列
+                        columns = GridCells.Adaptive(88.dp),
                         contentPadding = PaddingValues(12.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),

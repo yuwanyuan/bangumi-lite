@@ -170,6 +170,14 @@ class BangumiApi {
         currentProxyPort = port
         currentProxyUsername = username
         currentProxyPassword = password
+        // 图片加载（Coil 默认 ImageLoader）不经过 API 客户端，共享同一份代理配置
+        buildProxyConfig()?.let { config ->
+            ImageNetworkProxy.proxy = config.proxy
+            ImageNetworkProxy.authenticator = config.authenticator
+        } ?: run {
+            ImageNetworkProxy.proxy = null
+            ImageNetworkProxy.authenticator = null
+        }
         rebuildClients()
     }
 
@@ -433,7 +441,26 @@ class BangumiApi {
             } else {
                 stripHtml(inner)
             }
-            if (key.isBlank() || value.isBlank()) null else InfoboxItem(key, JsonPrimitive(value))
+            if (key.isBlank() || value.isBlank()) return@mapNotNull null
+            // 网页版里人名/公司名是站内链接（/person/3179 等），收集起来供 UI 做可点击跳转
+            val links = Regex("""<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>""").findAll(raw)
+                .mapNotNull { m ->
+                    val href = normalizeBangumiUrl(m.groupValues[1]) ?: return@mapNotNull null
+                    val text = stripHtml(m.groupValues[2])
+                    if (text.isBlank()) null else InfoboxLink(text, href)
+                }
+                .toList()
+            InfoboxItem(key, JsonPrimitive(value), links)
+        }
+    }
+
+    /** 站内相对链接补全为绝对地址；外站或非 http 链接返回 null 不做跳转 */
+    private fun normalizeBangumiUrl(href: String): String? {
+        val trimmed = href.trim()
+        return when {
+            trimmed.startsWith("/") -> "https://bgm.tv$trimmed"
+            trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
+            else -> null
         }
     }
 
@@ -968,4 +995,16 @@ private class ProxyAuthenticator(
             .header("Proxy-Authorization", credential)
             .build()
     }
+}
+
+/**
+ * 当前代理配置的全局快照，供图片加载（Coil 默认 ImageLoader）的动态 ProxySelector 读取。
+ * 由 BangumiApi.updateProxy 刷新——图片域名与 API 域名一样可能需要代理才能访问。
+ */
+object ImageNetworkProxy {
+    @Volatile
+    var proxy: java.net.Proxy? = null
+
+    @Volatile
+    var authenticator: okhttp3.Authenticator? = null
 }

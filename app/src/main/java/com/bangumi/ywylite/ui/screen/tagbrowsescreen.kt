@@ -105,13 +105,14 @@ fun TagBrowseScreen(
                 }
                 else -> {
                     LazyVerticalStaggeredGrid(
-                        columns = StaggeredGridCells.Fixed(3),
+                        // 自适应列宽：窄屏 3 列左右，平板自动多列
+                        columns = StaggeredGridCells.Adaptive(110.dp),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalItemSpacing = 6.dp,
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(uiState.data, key = { it.id }) { subject ->
+                        items(uiState.data.distinctBy { it.id }, key = { it.id }) { subject ->
                             SubjectCard(
                                 subject = subject,
                                 onClick = { onSubjectClick(subject.id) },
@@ -128,7 +129,7 @@ fun TagBrowseScreen(
                                             offset = uiState.offset
                                         )
                                         uiState = uiState.copy(
-                                            data = uiState.data + result.data,
+                                            data = (uiState.data + result.data).distinctBy { it.id },
                                             offset = uiState.offset + result.data.size,
                                             hasMore = (uiState.offset + result.data.size) < uiState.total
                                         )

@@ -124,7 +124,15 @@ data class Subject(
 @Serializable
 data class InfoboxItem(
     val key: String = "",
-    val value: JsonElement = JsonNull
+    val value: JsonElement = JsonNull,
+    /** 值内的超链接（网页版里人名/公司名可点进对应页面），text 为值文本中的原文 */
+    val links: List<InfoboxLink> = emptyList()
+)
+
+@Serializable
+data class InfoboxLink(
+    val text: String = "",
+    val href: String = ""
 )
 
 /** /v0/subjects/{id}/characters 的角色条目；v0 不提供 name_cn */

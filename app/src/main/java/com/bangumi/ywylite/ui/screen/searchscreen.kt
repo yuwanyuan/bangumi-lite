@@ -154,7 +154,7 @@ fun SearchScreen(
                                             offset = uiState.offset
                                         )
                                         uiState = uiState.copy(
-                                            results = uiState.results + result.data,
+                                            results = (uiState.results + result.data).distinctBy { it.id },
                                             offset = uiState.offset + result.data.size,
                                             hasMore = (uiState.offset + result.data.size) < uiState.total
                                         )

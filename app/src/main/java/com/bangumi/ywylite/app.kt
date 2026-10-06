@@ -1,8 +1,11 @@
 package com.bangumi.ywylite
 
 import android.app.Application
+import coil.ImageLoader
+import coil.ImageLoaderFactory
 import com.bangumi.ywylite.data.Settings
 import com.bangumi.ywylite.data.api.BangumiApi
+import com.bangumi.ywylite.data.api.ImageNetworkProxy
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -11,8 +14,13 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import okhttp3.OkHttpClient
+import java.io.IOException
+import java.net.ProxySelector
+import java.net.URI
+import java.net.SocketAddress
 
-class App : Application() {
+class App : Application(), ImageLoaderFactory {
 
     val api: BangumiApi by lazy { BangumiApi() }
     val settings: Settings by lazy { Settings(this) }
@@ -54,6 +62,29 @@ class App : Application() {
                 api.updateProxy(proxy.enabled, proxy.type, proxy.host, proxy.port, proxy.username, proxy.password)
             }
         }
+    }
+
+    /**
+     * Coil 全局 ImageLoader：封面等图片域名可能同样需要代理，
+     * 用动态 ProxySelector 跟随 ImageNetworkProxy（与 API 客户端同步刷新）。
+     */
+    override fun newImageLoader(): ImageLoader {
+        val client = OkHttpClient.Builder()
+            .proxySelector(object : ProxySelector() {
+                override fun select(uri: URI?): List<java.net.Proxy> =
+                    ImageNetworkProxy.proxy?.let { listOf(it) } ?: listOf(java.net.Proxy.NO_PROXY)
+
+                override fun connectFailed(uri: URI?, sa: SocketAddress?, ioe: IOException?) {}
+            })
+            .proxyAuthenticator { route, response ->
+                // 返回 null 表示不提供代理认证
+                ImageNetworkProxy.authenticator?.authenticate(route, response)
+            }
+            .build()
+        return ImageLoader.Builder(this)
+            .okHttpClient(client)
+            .crossfade(true)
+            .build()
     }
 
     /**

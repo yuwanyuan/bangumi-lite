@@ -67,11 +67,15 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Velocity
@@ -456,13 +460,17 @@ private fun SubjectDetailContent(
                 )
             )
 
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        // 平板等宽屏下内容限宽居中，避免文字行被拉得过长
+                        .widthIn(max = 840.dp)
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp)
+                        .align(Alignment.TopCenter),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     AsyncImage(
                         model = imageUrl,
@@ -563,6 +571,7 @@ private fun SubjectDetailContent(
                 }
 
                 Spacer(modifier = Modifier.height(72.dp))
+                }
             }
         }
 
@@ -1366,6 +1375,45 @@ private fun infoboxValue(value: JsonElement): String = when (value) {
     else -> ""
 }
 
+/** infobox 文本 + 可点击链接：人名/公司名等按网页版一样跳转对应页面；整值为 URL 时整体高亮 */
+private fun buildInfoboxAnnotatedString(
+    item: InfoboxItem,
+    value: String,
+    wholeIsUrl: Boolean,
+    context: Context
+): AnnotatedString = buildAnnotatedString {
+    withStyle(SpanStyle(color = Color(0xFF9E9E9E), fontWeight = FontWeight.SemiBold)) {
+        append("${item.key}  ")
+    }
+    val linkStyle = TextLinkStyles(
+        style = SpanStyle(color = Color(0xFF7FB3FF), textDecoration = TextDecoration.Underline)
+    )
+    if (item.links.isEmpty()) {
+        if (wholeIsUrl) {
+            withStyle(linkStyle.style ?: SpanStyle()) { append(value) }
+        } else {
+            append(value)
+        }
+        return@buildAnnotatedString
+    }
+    var cursor = 0
+    for (link in item.links) {
+        if (cursor >= value.length) break
+        val idx = value.indexOf(link.text, cursor)
+        if (idx < 0) continue
+        if (idx > cursor) append(value.substring(cursor, idx))
+        val end = (idx + link.text.length).coerceAtMost(value.length)
+        val text = value.substring(idx, end)
+        withLink(
+            LinkAnnotation.Url(link.href, linkStyle) { _ ->
+                openInBrowser(context, link.href)
+            }
+        ) { append(text) }
+        cursor = end
+    }
+    if (cursor < value.length) append(value.substring(cursor))
+}
+
 /**
  * 全屏封面查看器：上半放大封面（长按保存到相册），下半滚动显示条目 infobox 详情。
  * 详情列表滚到顶后继续下拉会跟手拖出整层，松手（或拖过阈值）关闭并缩回封面位置。
@@ -1542,21 +1590,14 @@ private fun SubjectImageViewer(
                     if (value.isEmpty()) return@forEach
                     val url = asBrowsableUrl(value)
                     Text(
-                        text = buildAnnotatedString {
-                            withStyle(SpanStyle(color = Color(0xFF9E9E9E), fontWeight = FontWeight.SemiBold)) {
-                                append("${item.key}  ")
-                            }
-                            if (url != null) {
-                                withStyle(SpanStyle(color = Color(0xFF7FB3FF), textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)) {
-                                    append(value)
-                                }
-                            } else {
-                                append(value)
-                            }
-                        },
+                        text = buildInfoboxAnnotatedString(item, value, url != null, context),
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.White,
-                        modifier = if (url != null) Modifier.clickable { openInBrowser(context, url) } else Modifier
+                        modifier = if (url != null && item.links.isEmpty()) {
+                            Modifier.clickable { openInBrowser(context, url) }
+                        } else {
+                            Modifier
+                        }
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
@@ -1822,7 +1863,7 @@ private fun SubjectCommentsSheet(
                                         loadingMore = true
                                         runCatching { getComments(subjectId, offset, 20) }
                                             .onSuccess { result ->
-                                                comments = comments + result.data
+                                                comments = (comments + result.data).distinctBy { it.id }
                                                 offset += result.data.size
                                                 total = result.total
                                             }

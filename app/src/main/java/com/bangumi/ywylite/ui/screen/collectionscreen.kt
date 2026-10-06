@@ -227,7 +227,7 @@ fun CollectionScreen(
                                                 uiState.copy(hasMore = false)
                                             } else {
                                                 uiState.copy(
-                                                    data = uiState.data + result.data,
+                                                    data = (uiState.data + result.data).distinctBy { it.subject_id },
                                                     offset = uiState.offset + result.data.size,
                                                     hasMore = (uiState.offset + result.data.size) < uiState.total
                                                 )

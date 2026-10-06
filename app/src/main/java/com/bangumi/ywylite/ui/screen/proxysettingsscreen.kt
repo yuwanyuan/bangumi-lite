@@ -1,5 +1,6 @@
 ﻿package com.bangumi.ywylite.ui.screen
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -8,10 +9,14 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.Settings
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class TestState { Idle, Testing, Success, Failed }
 
@@ -23,7 +28,10 @@ fun ProxySettingsScreen(
 ) {
     val scope = rememberCoroutineScope()
     val app = App.INSTANCE
+    val context = LocalContext.current
 
+    // 只读一次初值。此前用持续 collect 回显，输入过程可能被 flow 发射覆盖，
+    // 且保存协程随页面销毁被取消导致只写了一半字段（表现为输入丢失、代理未生效）
     var enabled by remember { mutableStateOf(false) }
     var type by remember { mutableStateOf("HTTP") }
     var host by remember { mutableStateOf("") }
@@ -35,22 +43,12 @@ fun ProxySettingsScreen(
     var testResult by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
-        settings.proxyEnabled.collect { enabled = it }
-    }
-    LaunchedEffect(Unit) {
-        settings.proxyType.collect { type = it }
-    }
-    LaunchedEffect(Unit) {
-        settings.proxyHost.collect { host = it }
-    }
-    LaunchedEffect(Unit) {
-        settings.proxyPort.collect { port = it.toString() }
-    }
-    LaunchedEffect(Unit) {
-        settings.proxyUsername.collect { username = it }
-    }
-    LaunchedEffect(Unit) {
-        settings.proxyPassword.collect { password = it }
+        enabled = settings.proxyEnabled.first()
+        type = settings.proxyType.first()
+        host = settings.proxyHost.first()
+        port = settings.proxyPort.first().toString()
+        username = settings.proxyUsername.first()
+        password = settings.proxyPassword.first()
     }
 
     Scaffold(
@@ -166,13 +164,18 @@ fun ProxySettingsScreen(
                 Button(
                     onClick = {
                         scope.launch {
-                            settings.saveProxyEnabled(enabled)
-                            settings.saveProxyType(type)
-                            settings.saveProxyHost(host)
-                            settings.saveProxyPort(port.toIntOrNull() ?: 7890)
-                            settings.saveProxyUsername(username)
-                            settings.saveProxyPassword(password)
-                            app.api.updateProxy(enabled, type, host, port.toIntOrNull() ?: 7890, username, password)
+                            // NonCancellable：保存后立刻退出页面也不会中断写入，
+                            // 否则部分字段没落盘（输入看似丢失）且代理未生效
+                            withContext(NonCancellable) {
+                                settings.saveProxyEnabled(enabled)
+                                settings.saveProxyType(type)
+                                settings.saveProxyHost(host)
+                                settings.saveProxyPort(port.toIntOrNull() ?: 7890)
+                                settings.saveProxyUsername(username)
+                                settings.saveProxyPassword(password)
+                                app.api.updateProxy(enabled, type, host, port.toIntOrNull() ?: 7890, username, password)
+                            }
+                            Toast.makeText(context, "代理配置已保存", Toast.LENGTH_SHORT).show()
                         }
                     },
                     modifier = Modifier.weight(1f)

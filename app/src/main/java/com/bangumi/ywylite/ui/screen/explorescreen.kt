@@ -150,7 +150,8 @@ fun ExploreScreen(
             }
 
             LazyVerticalStaggeredGrid(
-                columns = StaggeredGridCells.Fixed(3),
+                // 自适应列宽：窄屏 3 列左右，平板自动多列
+                columns = StaggeredGridCells.Adaptive(110.dp),
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalItemSpacing = 6.dp,
@@ -168,7 +169,8 @@ fun ExploreScreen(
                     }
                     uiState.data.isEmpty() -> item(span = StaggeredGridItemSpan.FullLine) { EmptyView() }
                     else -> {
-                        items(uiState.data, key = { it.id }) { subject ->
+                        // 翻页接口可能返回重叠数据，重复 key 会让网格直接崩溃（平板宽屏预取更多更容易触发）
+                        items(uiState.data.distinctBy { it.id }, key = { it.id }) { subject ->
                             SubjectCard(
                                 subject = subject,
                                 onClick = { onSubjectClick(subject.id) },
@@ -192,7 +194,7 @@ fun ExploreScreen(
                                             )
                                         }
                                         uiState = uiState.copy(
-                                            data = uiState.data + result.data,
+                                            data = (uiState.data + result.data).distinctBy { it.id },
                                             offset = uiState.offset + result.data.size,
                                             hasMore = (uiState.offset + result.data.size) < uiState.total
                                         )
