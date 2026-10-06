@@ -110,7 +110,9 @@ data class SubjectDetailUiState(
     val episodes: List<Episode> = emptyList(),
     val watchedEpisodes: Set<Int> = emptySet(),
     val relatedSubjects: List<RelatedSubject> = emptyList(),
-    val characters: List<CharacterItem> = emptyList()
+    val characters: List<CharacterItem> = emptyList(),
+    // 网页版完整 infobox（v0 接口只有部分字段），查看器优先使用
+    val webInfobox: List<InfoboxItem> = emptyList()
 )
 
 val collectionTypeColors = mapOf(
@@ -194,13 +196,15 @@ fun SubjectDetailScreen(
             val episodes = runCatching { app.api.getEpisodes(subjectId).data }.getOrDefault(emptyList())
             val relatedSubjects = runCatching { app.api.getRelatedSubjects(subjectId) }.getOrDefault(emptyList())
             val characters = runCatching { app.api.getSubjectCharacters(subjectId) }.getOrDefault(emptyList())
+            val webInfobox = runCatching { app.api.getSubjectWebInfobox(subjectId) }.getOrDefault(emptyList())
 
             uiState = uiState.copy(
                 loading = false,
                 subject = subject,
                 episodes = episodes,
                 relatedSubjects = relatedSubjects,
-                characters = characters
+                characters = characters,
+                webInfobox = webInfobox
             )
         } catch (e: Exception) {
             uiState = uiState.copy(loading = false, error = e.message)
@@ -631,7 +635,7 @@ private fun SubjectDetailContent(
                 ?: subject.images?.common?.replace("http://", "https://")
                 ?: imageUrl,
             title = subject.nameCn.ifEmpty { subject.name },
-            infobox = subject.infobox,
+            infobox = uiState.webInfobox.ifEmpty { subject.infobox },
             onDismiss = { showImageViewer = false }
         )
     }
@@ -1595,57 +1599,75 @@ private suspend fun saveImageToGallery(context: Context, url: String): String = 
     "Pictures/ywylite/$fileName"
 }
 
-/** 角色介绍：横向滑动卡片（方形头像 + 名字 + 关系/声优），点击在浏览器打开角色页 */
+/** 角色介绍：默认折叠；展开为横向滑动卡片（方形头像，顶部对齐裁切露出头部），点击打开角色页 */
 @Composable
 private fun CharactersSection(characters: List<CharacterItem>) {
     val context = LocalContext.current
+    var expanded by remember { mutableStateOf(false) }
     Column {
-        Text("角色介绍 (${characters.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(6.dp))
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(vertical = 2.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded },
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            items(characters, key = { it.id }) { character ->
-                val avatar = character.images?.medium?.replace("http://", "https://")
-                    ?: character.images?.small?.replace("http://", "https://") ?: ""
-                Column(
-                    modifier = Modifier
-                        .width(64.dp)
-                        .clickable { openInBrowser(context, "https://bgm.tv/character/${character.id}") },
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    if (avatar.isNotEmpty()) {
-                        AsyncImage(
-                            model = avatar,
-                            contentDescription = character.name,
-                            modifier = Modifier
-                                .size(64.dp)
-                                .clip(RoundedCornerShape(6.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(3.dp))
-                    Text(
-                        text = character.name,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    val subInfo = buildList {
-                        if (character.relation.isNotEmpty()) add(character.relation)
-                        character.actors.firstOrNull()?.let { add("CV ${it.name}") }
-                    }
-                    if (subInfo.isNotEmpty()) {
+            Text("角色介绍 (${characters.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                text = if (expanded) "收起" else "展开",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        if (expanded) {
+            Spacer(modifier = Modifier.height(6.dp))
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(vertical = 2.dp)
+            ) {
+                items(characters, key = { it.id }) { character ->
+                    val avatar = character.images?.medium?.replace("http://", "https://")
+                        ?: character.images?.small?.replace("http://", "https://") ?: ""
+                    Column(
+                        modifier = Modifier
+                            .width(64.dp)
+                            .clickable { openInBrowser(context, "https://bgm.tv/character/${character.id}") },
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        if (avatar.isNotEmpty()) {
+                            AsyncImage(
+                                model = avatar,
+                                contentDescription = character.name,
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(RoundedCornerShape(6.dp)),
+                                contentScale = ContentScale.Crop,
+                                // 角色立绘是竖图，顶部对齐裁切才不会切掉头
+                                alignment = Alignment.TopCenter
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(3.dp))
                         Text(
-                            text = subInfo.joinToString(" · "),
+                            text = character.name,
                             style = MaterialTheme.typography.labelSmall,
-                            fontSize = 9.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        val subInfo = buildList {
+                            if (character.relation.isNotEmpty()) add(character.relation)
+                            character.actors.firstOrNull()?.let { add("CV ${it.name}") }
+                        }
+                        if (subInfo.isNotEmpty()) {
+                            Text(
+                                text = subInfo.joinToString(" · "),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 9.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }

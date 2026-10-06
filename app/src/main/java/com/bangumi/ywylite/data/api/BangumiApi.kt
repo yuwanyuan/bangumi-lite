@@ -13,6 +13,7 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.Authenticator
 import okhttp3.Cookie
 import okhttp3.CookieJar
@@ -335,7 +336,8 @@ class BangumiApi {
         offset: Int = 0,
         limit: Int = 20
     ): PagedSubject {
-        return nextClient.post("/v0/search/subjects") {
+        // 搜索端点只在 api.bgm.tv 上，next.bgm.tv 对它返回 405，必须用 client
+        return client.post("/v0/search/subjects") {
             url {
                 parameters.append("offset", offset.toString())
                 parameters.append("limit", limit.toString())
@@ -350,6 +352,104 @@ class BangumiApi {
         return client.get("/v0/subjects/${id}") {
             withAuth()
         }.body()
+    }
+
+    /**
+     * 从条目网页解析完整 infobox。v0 接口的 infobox 只有部分字段（实测同一条目网页 46 条 vs v0 12 条），
+     * 查看器的「详情」面板需要网页版全量数据。
+     */
+    suspend fun getSubjectWebInfobox(subjectId: Int): List<InfoboxItem> {
+        val html = webClient.get("/subject/${subjectId}") {
+            headers { append(HttpHeaders.UserAgent, "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 ywylite") }
+        }.bodyAsText()
+        return parseInfoboxHtml(html)
+    }
+
+    /** 解析条目页 <ul id="infobox">；infobox 内含嵌套 ul（多值字段），用配对计数定位边界 */
+    private fun parseInfoboxHtml(html: String): List<InfoboxItem> {
+        val start = html.indexOf("<ul id=\"infobox\">")
+        if (start < 0) return emptyList()
+        var depth = 0
+        var i = start
+        var end = -1
+        while (i < html.length - 4) {
+            when {
+                html.startsWith("<ul", i) -> { depth++; i += 3 }
+                html.startsWith("</ul", i) -> { depth--; i += 4; if (depth == 0) { end = i; break } }
+                else -> i++
+            }
+        }
+        if (end < 0) return emptyList()
+        val segment = html.substring(start, end)
+
+        // 切出顶层 li（跳过嵌套的 sub_section li）
+        val items = mutableListOf<String>()
+        var liDepth = 0
+        var itemStart = -1
+        var j = 0
+        while (j < segment.length - 4) {
+            when {
+                segment.startsWith("<li", j) -> {
+                    if (liDepth == 0) itemStart = segment.indexOf('>', j) + 1
+                    liDepth++
+                    j += 3
+                }
+                segment.startsWith("</li>", j) -> {
+                    liDepth--
+                    if (liDepth == 0 && itemStart > 0) {
+                        items.add(segment.substring(itemStart, j))
+                        itemStart = -1
+                    }
+                    j += 5
+                }
+                else -> j++
+            }
+        }
+
+        return items.mapNotNull { raw ->
+            val tip = Regex("""<span class="tip[^"]*"[^>]*>([\s\S]*?)</span>""").find(raw) ?: return@mapNotNull null
+            val key = stripHtml(tip.groupValues[1]).trimEnd(':', ' ')
+            val inner = raw.substring(tip.range.last + 1)
+            val value = if (inner.contains("<ul")) {
+                // 多值字段（别名等）：每行一个嵌套 li。子项 tip 与主键相同的直接取值，
+                // 不同的（如「副标题」）是同组的独立属性，保留为前缀
+                Regex("""<li[^>]*>([\s\S]*?)</li>""").findAll(inner)
+                    .map { m ->
+                        val rawSub = m.groupValues[1]
+                        val tipM = Regex("""<span class="tip([^"]*)"[^>]*>([\s\S]*?)</span>""").find(rawSub)
+                        val hidden = tipM?.groupValues?.get(1)?.contains("display: none") == true
+                        val label = tipM?.let { stripHtml(it.groupValues[2]) }?.trimEnd(':', ' ') ?: ""
+                        val valueText = stripHtml(
+                            rawSub.replace(Regex("""<span class="tip[^"]*"[^>]*>[\s\S]*?</span>"""), "")
+                        )
+                        when {
+                            valueText.isBlank() -> ""
+                            hidden || label.isBlank() || label == key -> valueText
+                            else -> "$label $valueText"
+                        }
+                    }
+                    .filter { it.isNotBlank() }
+                    .joinToString("、")
+            } else {
+                stripHtml(inner)
+            }
+            if (key.isBlank() || value.isBlank()) null else InfoboxItem(key, JsonPrimitive(value))
+        }
+    }
+
+    private fun stripHtml(s: String): String {
+        var text = s
+            .replace(Regex("""<br\s*/?>"""), "、")
+            .replace(Regex("""<span class="tip[^"]*"[^>]*>[\s\S]*?</span>"""), "")
+            .replace(Regex("""<[^>]+>"""), " ")
+        for ((entity, ch) in mapOf(
+            "&amp;" to "&", "&lt;" to "<", "&gt;" to ">", "&quot;" to "\"",
+            "&#39;" to "'", "&nbsp;" to " ", "&hellip;" to "…", "&middot;" to "·"
+        )) {
+            text = text.replace(entity, ch)
+        }
+        text = text.replace(Regex("""&#(\d+);""")) { m -> m.groupValues[1].toIntOrNull()?.toChar()?.toString() ?: "" }
+        return text.replace(Regex("""\s+"""), " ").trim(' ', '、')
     }
 
     suspend fun getEpisodes(

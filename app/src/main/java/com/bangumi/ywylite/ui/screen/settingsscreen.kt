@@ -17,6 +17,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
+import com.bangumi.ywylite.ui.component.openInBrowser
+import android.content.Context
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -29,6 +32,7 @@ fun SettingsScreen(
 ) {
     val app = App.INSTANCE
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val darkMode by app.settings.darkMode.collectAsState(initial = "system")
     var showDarkModeDialog by remember { mutableStateOf(false) }
 
@@ -225,6 +229,15 @@ fun SettingsScreen(
                     title = "缓存管理",
                     subtitle = "查看和清理缓存",
                     onClick = onNavigateToCacheSettings
+                )
+            }
+
+            SettingsSection(title = "关于") {
+                SettingsItem(
+                    icon = Icons.Default.Code,
+                    title = "GitHub",
+                    subtitle = "github.com/yuwanyuan/bangumi-lite",
+                    onClick = { openInBrowser(context, "https://github.com/yuwanyuan/bangumi-lite") }
                 )
             }
         }

@@ -17,7 +17,12 @@ import com.bangumi.ywylite.ui.component.*
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 
+@Serializable
 data class SearchUiState(
     val query: String = "",
     val loading: Boolean = false,
@@ -28,6 +33,16 @@ data class SearchUiState(
     val hasMore: Boolean = false
 )
 
+/** 搜索状态整体 JSON 化保存：从条目详情返回时还原关键词与结果，而不是回到空白初始页 */
+private val searchStateSaver = Saver<SearchUiState, String>(
+    save = { Json.encodeToString(SearchUiState.serializer(), it) },
+    restore = {
+        runCatching { Json.decodeFromString(SearchUiState.serializer(), it) }
+            .getOrDefault(SearchUiState())
+            .copy(loading = false)
+    }
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
@@ -36,7 +51,7 @@ fun SearchScreen(
 ) {
     val app = App.INSTANCE
     val scope = rememberCoroutineScope()
-    var uiState by remember { mutableStateOf(SearchUiState()) }
+    var uiState by rememberSaveable(stateSaver = searchStateSaver) { mutableStateOf(SearchUiState()) }
     var searchJob by remember { mutableStateOf<Job?>(null) }
 
     Scaffold(
