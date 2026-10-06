@@ -94,7 +94,6 @@ import com.bangumi.ywylite.data.model.*
 import com.bangumi.ywylite.ui.component.EmptyView
 import com.bangumi.ywylite.ui.component.ErrorView
 import com.bangumi.ywylite.ui.component.LoadingView
-import com.bangumi.ywylite.ui.component.UserAges
 import com.bangumi.ywylite.ui.component.openInBrowser
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CancellationException
@@ -1061,7 +1060,6 @@ private fun EpisodeCommentRow(comment: EpisodeComment) {
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
                 )
-                RegAgeText(0, comment.avatar)
                 Text(
                     text = "#${comment.floor}",
                     style = MaterialTheme.typography.labelSmall,
@@ -1937,19 +1935,6 @@ private fun SubjectCommentsSheet(
     }
 }
 
-/** 用户名旁的站龄徽标：按 ID/头像离线推算，无法推算时不显示 */
-@Composable
-private fun RegAgeText(userId: Int, avatar: String) {
-    val age = remember(userId, avatar) { UserAges.estimate(userId, avatar) }
-    if (age != null) {
-        Text(
-            text = "站龄 ${UserAges.format(age)}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-        )
-    }
-}
-
 @Composable
 private fun SubjectCommentCard(
     comment: CommentItem,
@@ -1992,8 +1977,6 @@ private fun SubjectCommentCard(
                             }
                         }
                 )
-                Spacer(modifier = Modifier.width(6.dp))
-                RegAgeText(comment.user?.id ?: 0, avatarUrl)
                 Spacer(modifier = Modifier.width(6.dp))
                 if (comment.rate > 0) {
                     Text("★${comment.rate}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)

@@ -26,9 +26,9 @@ import kotlinx.serialization.json.Json
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 
-/** 搜索范围：null = 条目（所有），其余为条目类型（v0 搜索的 filter.type） */
+/** 搜索范围：null = all（条目（所有）），其余为条目类型（v0 搜索的 filter.type） */
 private val searchScopes = listOf(
-    null to "条目（所有）",
+    null to "all",
     2 to "动画",
     1 to "书籍",
     4 to "游戏",

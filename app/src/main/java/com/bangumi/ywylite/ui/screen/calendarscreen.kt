@@ -1,6 +1,7 @@
 package com.bangumi.ywylite.ui.screen
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -128,13 +129,15 @@ private fun CalendarContent(
             if (currentDay.items.isEmpty()) {
                 EmptyView("今日没有放送")
             } else {
-                Column(
+                // 懒加载：一天几十个条目，非 Lazy 的 Column 会一次性组合全部条目、
+                // 所有封面同时挤进图片加载队列（每主机并发有限），表现为图片长时间出不来
+                LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    currentDay.items.forEach { subject ->
+                    items(currentDay.items, key = { it.id }) { subject ->
                         CalendarItem(
                             subject = subject,
                             onClick = { onSubjectClick(subject.id) }

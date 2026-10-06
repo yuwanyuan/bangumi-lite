@@ -81,6 +81,8 @@ class App : Application(), ImageLoaderFactory {
      */
     override fun newImageLoader(): ImageLoader {
         val client = OkHttpClient.Builder()
+            // 封面一次并发十几张，默认每主机 5 并发会让队列排很久
+            .dispatcher(okhttp3.Dispatcher().apply { maxRequestsPerHost = 12 })
             .proxySelector(object : ProxySelector() {
                 override fun select(uri: URI?): List<java.net.Proxy> =
                     ImageNetworkProxy.proxy?.let { listOf(it) } ?: listOf(java.net.Proxy.NO_PROXY)
