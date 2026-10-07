@@ -1,6 +1,9 @@
 package com.bangumi.ywylite.data.api
 
 import android.content.Context
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import com.bangumi.ywylite.data.dataStore
 import com.bangumi.ywylite.data.model.*
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -13,7 +16,12 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -74,6 +82,7 @@ class BangumiApi(private val context: Context) {
         const val USER_AGENT = "BGMLite/1.2 (Android; +https://github.com/yuwanyuan/bangumi-lite)"
         private const val NETWORK_CACHE_DIR = "network_cache"
         private const val NETWORK_CACHE_SIZE = 20L * 1024 * 1024
+        private val WEB_COOKIES_KEY = stringPreferencesKey("web_session_cookies")
     }
 
     /**
@@ -102,17 +111,58 @@ class BangumiApi(private val context: Context) {
     private var currentProxyUsername = ""
     private var currentProxyPassword = ""
 
-    // Web 端会话 Cookie（登录流程用，进程内保存）。
+    // Web 端会话 Cookie（登录流程用）。进程内保存 + DataStore 持久化：
+    // 登录要过验证码，会话丢了就得人工重登——此前只存内存，重启后所有网页请求
+    // 退回匿名身份，R18 内容（如里番标签）会被 bgm.tv 整段扣掉、标签列表也会缺 R18 条目。
     // 注意：必须声明在 _webClient/_oauthClient 之前——字段初始化时 createClient 会引用它们
     private val webCookieStore = ConcurrentHashMap<String, Cookie>()
     private val webCookieJar = object : CookieJar {
         override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
             cookies.forEach { c -> webCookieStore["${c.domain}|${c.name}"] = c }
+            if (cookies.any { it.value.isNotBlank() }) cookiePersistScope.launch { persistWebCookies() }
         }
 
         override fun loadForRequest(url: HttpUrl): List<Cookie> =
             webCookieStore.values.filter { it.matches(url) }.toList()
     }
+
+    private val cookiePersistScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private suspend fun persistWebCookies() {
+        val blob = webCookieStore.values.joinToString("\n") { c ->
+            listOf(c.domain, c.name, c.value, c.expiresAt.toString(), c.path, c.secure, c.httpOnly, c.hostOnly)
+                .joinToString("\t")
+        }
+        context.dataStore.edit { it[WEB_COOKIES_KEY] = blob }
+    }
+
+    /**
+     * 启动时恢复上次会话的网页 Cookie（App.onCreate 里 appReady 前调用）。
+     * Cookie 值不含制表符/换行，按 \t 列、\n 行序列化即可无损往返。
+     */
+    suspend fun restoreWebSession() {
+        val blob = context.dataStore.data.map { it[WEB_COOKIES_KEY] }.first() ?: return
+        blob.lineSequence().filter { it.isNotBlank() }.forEach { line ->
+            val p = line.split("\t")
+            if (p.size < 8) return@forEach
+            runCatching {
+                val builder = Cookie.Builder()
+                    .name(p[1])
+                    .value(p[2])
+                    .expiresAt(p[3].toLong())
+                    .path(p[4])
+                if (p[5] == "true") builder.secure()
+                if (p[6] == "true") builder.httpOnly()
+                if (p[7] == "true") builder.hostOnlyDomain(p[0]) else builder.domain(p[0])
+                val c = builder.build()
+                webCookieStore["${c.domain}|${c.name}"] = c
+            }
+        }
+    }
+
+    /** 当前是否持有 bgm.tv 网页登录会话（R18 内容只对登录会话下发） */
+    val hasWebSession: Boolean
+        get() = webCookieStore.values.any { it.name == "chii_auth" && it.value.isNotBlank() }
 
     // 官方 API 与 Web 端域名，可由设置切换（见 updateApiHost）
     private var apiBaseUrl = "https://api.bgm.tv"
@@ -264,9 +314,12 @@ class BangumiApi(private val context: Context) {
         }
     }
 
-    /** 退出登录：清掉 bgm.tv 网页会话 Cookie，避免残留上个账号的身份 */
+    /** 退出登录：清掉 bgm.tv 网页会话 Cookie（含持久化副本），避免残留上个账号的身份 */
     fun clearWebSession() {
         webCookieStore.clear()
+        cookiePersistScope.launch {
+            context.dataStore.edit { it.remove(WEB_COOKIES_KEY) }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -868,6 +921,13 @@ class BangumiApi(private val context: Context) {
 
         // 网页只在页数较多时输出 p_edge 总数标记（小标签如「宫崎骏」4 页就没有），
         // 缺失时从分页器里的最大页码推断，否则小标签会被误判成只有 1 页、后续页永远加载不出来
+        val totalPages = parseHtmlTotalPages(html, page)
+
+        return TagBrowsePage(subjects = subjects, page = page, totalPages = totalPages)
+    }
+
+    /** 从 bgm.tv 页面 HTML 解析总页数：p_edge 标记与分页器最大页码取较大值 */
+    private fun parseHtmlTotalPages(html: String, page: Int): Int {
         val pEdgePages = Regex("""<span class="p_edge">\(&nbsp;\d+&nbsp;/&nbsp;(\d+)&nbsp;\)</span>""")
             .find(html)?.groupValues?.get(1)?.toIntOrNull()
         val pagerMax = Regex("""<div class="page_inner">([\s\S]*?)</div>""").find(html)
@@ -877,9 +937,7 @@ class BangumiApi(private val context: Context) {
                     .mapNotNull { it.groupValues[1].toIntOrNull() }
                     .maxOrNull()
             }
-        val totalPages = maxOf(pEdgePages ?: 1, pagerMax ?: 1, page)
-
-        return TagBrowsePage(subjects = subjects, page = page, totalPages = totalPages)
+        return maxOf(pEdgePages ?: 1, pagerMax ?: 1, page)
     }
 
     suspend fun getUserTimeline(
@@ -1067,11 +1125,23 @@ class BangumiApi(private val context: Context) {
         }.body()
     }
 
-    suspend fun getTags(
+    /**
+     * 标签索引分页加载。网页索引每页固定 100 个标签、按标注人数降序，
+     * 动画分区共 2000+ 页（约 20 万个标签）——app 内只加载到用户翻到的页。
+     */
+    suspend fun getTagIndexPage(
         typePath: String = "anime",
-    ): List<TagInfo> {
-        val response = webClient.get("/${typePath}/tag")
-        return parseTagsFromHtml(response.bodyAsText())
+        page: Int = 1
+    ): TagIndexPage {
+        val response = webClient.get("/${typePath}/tag") {
+            url { parameters.append("page", page.coerceAtLeast(1).toString()) }
+        }
+        val html = response.bodyAsText()
+        return TagIndexPage(
+            tags = parseTagsFromHtml(html),
+            page = page.coerceAtLeast(1),
+            totalPages = parseHtmlTotalPages(html, page)
+        )
     }
 
     /**

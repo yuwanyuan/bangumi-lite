@@ -93,6 +93,16 @@ class Settings(private val context: Context) {
         prefs[DYNAMIC_COLOR_KEY] ?: false
     }
 
+    /** 启动时底栏默认打开的页面："explore"=浏览，"collection"=收藏（默认收藏，维持历史行为） */
+    val defaultTab: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[DEFAULT_TAB_KEY] ?: "collection"
+    }
+
+    /** 收藏页条目样式：true=瀑布流（与浏览页一致），false=列表（默认） */
+    val collectionWaterfall: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[COLLECTION_WATERFALL_KEY] ?: false
+    }
+
     suspend fun saveToken(token: String) {
         context.dataStore.edit { prefs ->
             prefs[ACCESS_TOKEN_KEY] = token
@@ -186,6 +196,18 @@ class Settings(private val context: Context) {
         }
     }
 
+    suspend fun saveDefaultTab(tab: String) {
+        context.dataStore.edit { prefs ->
+            prefs[DEFAULT_TAB_KEY] = tab
+        }
+    }
+
+    suspend fun saveCollectionWaterfall(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[COLLECTION_WATERFALL_KEY] = enabled
+        }
+    }
+
     companion object {
         private val ACCESS_TOKEN_KEY = stringPreferencesKey("access_token")
         private val USERNAME_KEY = stringPreferencesKey("username")
@@ -201,5 +223,7 @@ class Settings(private val context: Context) {
     private val TOKEN_EXPIRES_AT_KEY = longPreferencesKey("token_expires_at")
     private val DARK_MODE_KEY = stringPreferencesKey("dark_mode")
         private val DYNAMIC_COLOR_KEY = booleanPreferencesKey("dynamic_color")
+    private val DEFAULT_TAB_KEY = stringPreferencesKey("default_tab")
+    private val COLLECTION_WATERFALL_KEY = booleanPreferencesKey("collection_waterfall")
     }
 }

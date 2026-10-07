@@ -150,12 +150,17 @@ data class CharacterActor(
 @Serializable
 data class CollectionCount(
     val wish: Int = 0,
-    val done: Int = 0,
+    /** 看过人数——v0 的字段名是 collect（收藏状态 2），此前错写成 done 导致一直解析出 0 */
+    @SerialName("collect")
+    val collect: Int = 0,
     val doing: Int = 0,
     @SerialName("on_hold")
     val onHold: Int = 0,
     val dropped: Int = 0
-)
+) {
+    /** 全部收藏人数 = 五种收藏状态之和（v0 不直接下发总数） */
+    val total: Int get() = wish + collect + doing + onHold + dropped
+}
 
 @Serializable
 data class UserCollection(
@@ -348,6 +353,13 @@ data class TimelineItem(
 /** 标签浏览页（网页版 /anime/tag/... HTML 解析），网页每页固定 24 条 */
 data class TagBrowsePage(
     val subjects: List<SubjectSmall> = emptyList(),
+    val page: Int = 1,
+    val totalPages: Int = 1
+)
+
+/** 标签索引页的一页（网页版 /anime/tag HTML 解析），每页固定 100 个标签、按标注人数排序 */
+data class TagIndexPage(
+    val tags: List<TagInfo> = emptyList(),
     val page: Int = 1,
     val totalPages: Int = 1
 )

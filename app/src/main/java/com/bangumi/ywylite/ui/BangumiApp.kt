@@ -85,7 +85,12 @@ fun BangumiApp() {
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = Route.Collection.path,
+            // 默认打开页由设置决定（explore/collection）；appReady 放行前该值已恢复完成
+            startDestination = if (app.defaultTab.value == "explore") {
+                Route.Explore.path
+            } else {
+                Route.Collection.path
+            },
             modifier = Modifier.padding(innerPadding)
         ) {
             composable(Route.Explore.path) {

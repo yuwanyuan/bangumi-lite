@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.data.api.BangumiApi
 import com.bangumi.ywylite.data.model.SubjectSmall
@@ -145,7 +146,30 @@ fun TagBrowseScreen(
                         )
                     }
                 )
-                uiState.data.isEmpty() -> EmptyView()
+                uiState.data.isEmpty() -> {
+                    // 空列表有两种可能：标签确实没有条目，或整页被 R18 过滤——
+                    // bgm.tv 对未登录会话会把 R18 条目从列表里整段扣掉（连分页器都消失）
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            "暂无条目",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (!api.hasWebSession) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "该标签没有公开条目；若包含 R18 内容，bgm.tv 只对登录会话展示，请先在「我」页面登录后重试",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
                 else -> {
                     LazyVerticalStaggeredGrid(
                         // 自适应列宽：窄屏 3 列左右，平板自动多列

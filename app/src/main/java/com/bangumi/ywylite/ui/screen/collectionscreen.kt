@@ -6,6 +6,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
@@ -21,6 +26,23 @@ import com.bangumi.ywylite.data.model.PagedUserCollection
 import com.bangumi.ywylite.data.model.UserCollection
 import com.bangumi.ywylite.ui.component.*
 import kotlinx.coroutines.CancellationException
+
+/** 加载更多 footer：列表与瀑布流两种容器共用 */
+@Composable
+private fun CollectionLoadMoreFooter(loadMoreError: Boolean, onRetry: () -> Unit) {
+    if (loadMoreError) {
+        TextButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
+            Text("加载失败，点击重试")
+        }
+    } else {
+        Box(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+        }
+    }
+}
 
 data class CollectionUiState(
     val loading: Boolean = true,
@@ -69,7 +91,10 @@ fun CollectionScreen(
     val scope = rememberCoroutineScope()
     var uiState by remember { mutableStateOf(CollectionUiState()) }
     var username by remember { mutableStateOf<String?>(null) }
+    // 条目样式：瀑布流（与浏览页一致）或经典列表，设置页可随时切换
+    val waterfall by app.settings.collectionWaterfall.collectAsState(initial = false)
     val listState = rememberLazyListState()
+    val gridState = rememberLazyStaggeredGridState()
 
     LaunchedEffect(Unit) {
         app.settings.username.collect { name -> username = name }
@@ -105,12 +130,22 @@ fun CollectionScreen(
 
     // 滚动接近底部时加载下一页。旧实现把 LaunchedEffect 放在 footer item 内且以
     // offset 为 key：offset 变化 + footer 随数据追加重建都会重触发 → 连环拉完全部收藏
-    val nearEnd by remember {
+    val nearEnd by remember(waterfall) {
         derivedStateOf {
-            val info = listState.layoutInfo
-            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            // 列表与瀑布流的 layoutInfo 是两种类型，无法用 if 表达式合一，只能分支取值
+            val lastVisible: Int
+            val totalCount: Int
+            if (waterfall) {
+                val info = gridState.layoutInfo
+                lastVisible = info.visibleItemsInfo.maxOfOrNull { it.index } ?: -1
+                totalCount = info.totalItemsCount
+            } else {
+                val info = listState.layoutInfo
+                lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+                totalCount = info.totalItemsCount
+            }
             uiState.hasMore && !uiState.loadMoreError &&
-                lastVisible >= info.totalItemsCount - 4
+                lastVisible >= totalCount - 4
         }
     }
     LaunchedEffect(nearEnd, uiState.offset, uiState.loadMoreKey) {
@@ -228,6 +263,41 @@ fun CollectionScreen(
                     )
                     uiState.data.isEmpty() -> EmptyView("暂无收藏")
                     else -> {
+                        if (waterfall) {
+                            // 与浏览页一致的瀑布流：自适应列宽 + SubjectCard
+                            LazyVerticalStaggeredGrid(
+                                columns = StaggeredGridCells.Adaptive(110.dp),
+                                state = gridState,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalItemSpacing = 6.dp,
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                // 翻页数据可能重叠，去重后再交给网格（重复 key 会崩溃）
+                                items(uiState.data.distinctBy { it.subjectId }, key = { it.subjectId }) { item ->
+                                    item.subject?.let { subject ->
+                                        SubjectCard(
+                                            subject = subject,
+                                            onClick = { onSubjectClick(subject.id) },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+                                if (uiState.hasMore) {
+                                    item(span = StaggeredGridItemSpan.FullLine) {
+                                        CollectionLoadMoreFooter(
+                                            loadMoreError = uiState.loadMoreError,
+                                            onRetry = {
+                                                uiState = uiState.copy(
+                                                    loadMoreError = false,
+                                                    loadMoreKey = uiState.loadMoreKey + 1
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
                         LazyColumn(
                             state = listState,
                             contentPadding = PaddingValues(vertical = 8.dp),
@@ -268,30 +338,18 @@ fun CollectionScreen(
                             }
                             if (uiState.hasMore) {
                                 item {
-                                    if (uiState.loadMoreError) {
-                                        TextButton(
-                                            onClick = {
-                                                uiState = uiState.copy(
-                                                    loadMoreError = false,
-                                                    loadMoreKey = uiState.loadMoreKey + 1
-                                                )
-                                            },
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text("加载失败，点击重试")
+                                    CollectionLoadMoreFooter(
+                                        loadMoreError = uiState.loadMoreError,
+                                        onRetry = {
+                                            uiState = uiState.copy(
+                                                loadMoreError = false,
+                                                loadMoreKey = uiState.loadMoreKey + 1
+                                            )
                                         }
-                                    } else {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(16.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                        }
-                                    }
+                                    )
                                 }
                             }
+                        }
                         }
                     }
                 }

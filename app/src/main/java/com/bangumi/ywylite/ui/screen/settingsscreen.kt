@@ -38,6 +38,12 @@ fun SettingsScreen(
     val dynamicColor by app.settings.dynamicColor.collectAsState(initial = false)
     var showDarkModeDialog by remember { mutableStateOf(false) }
 
+    // 默认打开页与收藏页条目样式
+    val defaultTab by app.settings.defaultTab.collectAsState(initial = "collection")
+    val collectionWaterfall by app.settings.collectionWaterfall.collectAsState(initial = false)
+    var showDefaultTabDialog by remember { mutableStateOf(false) }
+    var showCollectionStyleDialog by remember { mutableStateOf(false) }
+
     // 官方 API / Web 端域名切换
     val apiHosts = listOf(
         "https://api.bgm.tv" to "api.bgm.tv（默认）",
@@ -68,6 +74,78 @@ fun SettingsScreen(
                 pingResults = pingResults + (url to ok)
             }
         }
+    }
+
+    if (showDefaultTabDialog) {
+        AlertDialog(
+            onDismissRequest = { showDefaultTabDialog = false },
+            title = { Text("默认打开") },
+            text = {
+                Column {
+                    listOf("collection" to "收藏", "explore" to "浏览").forEach { (value, label) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch { app.settings.saveDefaultTab(value) }
+                                    showDefaultTabDialog = false
+                                }
+                                .padding(vertical = 8.dp)
+                        ) {
+                            RadioButton(
+                                selected = defaultTab == value,
+                                onClick = {
+                                    scope.launch { app.settings.saveDefaultTab(value) }
+                                    showDefaultTabDialog = false
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(label)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDefaultTabDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showCollectionStyleDialog) {
+        AlertDialog(
+            onDismissRequest = { showCollectionStyleDialog = false },
+            title = { Text("收藏页样式") },
+            text = {
+                Column {
+                    listOf(false to "列表（经典）", true to "瀑布流（与浏览页一致）").forEach { (value, label) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch { app.settings.saveCollectionWaterfall(value) }
+                                    showCollectionStyleDialog = false
+                                }
+                                .padding(vertical = 8.dp)
+                        ) {
+                            RadioButton(
+                                selected = collectionWaterfall == value,
+                                onClick = {
+                                    scope.launch { app.settings.saveCollectionWaterfall(value) }
+                                    showCollectionStyleDialog = false
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(label)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showCollectionStyleDialog = false }) { Text("取消") }
+            }
+        )
     }
 
     if (showDarkModeDialog) {
@@ -202,6 +280,21 @@ fun SettingsScreen(
                         onClick = { scope.launch { app.settings.saveDynamicColor(!dynamicColor) } }
                     )
                 }
+            }
+
+            SettingsSection(title = "界面") {
+                SettingsItem(
+                    icon = Icons.Default.Home,
+                    title = "默认打开",
+                    subtitle = if (defaultTab == "explore") "浏览" else "收藏",
+                    onClick = { showDefaultTabDialog = true }
+                )
+                SettingsItem(
+                    icon = Icons.Default.GridView,
+                    title = "收藏页样式",
+                    subtitle = if (collectionWaterfall) "瀑布流（与浏览页一致）" else "列表（经典）",
+                    onClick = { showCollectionStyleDialog = true }
+                )
             }
 
             SettingsSection(title = "账号") {

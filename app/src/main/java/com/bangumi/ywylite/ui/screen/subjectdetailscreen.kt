@@ -538,12 +538,13 @@ private fun SubjectDetailContent(
                         subject.collection?.let { col ->
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 2.dp)) {
                                 CollectionCountChip("想看", col.wish, Color(0xFF2196F3))
-                                CollectionCountChip("看过", col.done, Color(0xFF4CAF50))
+                                CollectionCountChip("看过", col.collect, Color(0xFF4CAF50))
                                 CollectionCountChip("在看", col.doing, Color(0xFFFF9800))
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 CollectionCountChip("搁置", col.onHold, Color(0xFF9E9E9E))
                                 CollectionCountChip("抛弃", col.dropped, Color(0xFFF44336))
+                                CollectionCountChip("全部", col.total, Color(0xFF607D8B))
                             }
                         }
                         if (subject.airDate.isNotEmpty()) Text("放送: ${subject.airDate}", style = MaterialTheme.typography.bodySmall)

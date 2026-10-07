@@ -37,6 +37,12 @@ class App : Application(), ImageLoaderFactory {
      */
     val appReady = MutableStateFlow(false)
 
+    /**
+     * 启动默认页（"explore"/"collection"）。与 appReady 同批恢复：appReady 为 true 时必定已就绪，
+     * NavHost 的 startDestination 只在首次组装时生效，不能等 UI 层异步取值。
+     */
+    val defaultTab = MutableStateFlow("collection")
+
     // 续期必须串行：refresh_token 每次刷新都会轮换，并发续期会让后到的请求用到已作废的旧值
     private val refreshMutex = Mutex()
 
@@ -73,6 +79,10 @@ class App : Application(), ImageLoaderFactory {
             if (proxy.enabled) {
                 api.updateProxy(proxy.enabled, proxy.type, proxy.host, proxy.port, proxy.username, proxy.password)
             }
+            // 恢复上次会话的网页 Cookie：网页登录要过验证码，会话丢失就得人工重登；
+            // R18 内容（里番标签等）只对登录会话下发，匿名时列表直接为空
+            api.restoreWebSession()
+            defaultTab.value = settings.defaultTab.first()
             appReady.value = true
         }
     }
