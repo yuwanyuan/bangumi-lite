@@ -84,7 +84,7 @@ fun TagsScreen(
             tags = base.map { it.copy(subjectCount = tagSubjectCountCache["$path|${it.name}"] ?: -1) }
         )
 
-        // 真实条目数只能逐个标签查（v0 搜索一次一个 tag，约 0.5s / 3~8KB），
+        // 真实条目数只能逐个标签查（网页标签页 1~2 个请求算出总数），
         // 按 6 并发分批补齐、边取边显示；已缓存的直接跳过，重进页面几乎无需再请求
         val pending = base.filter { tagSubjectCountCache["$path|${it.name}"] == null }
         pending.chunked(6).forEach { batch ->

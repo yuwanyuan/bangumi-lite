@@ -1077,30 +1077,24 @@ class BangumiApi(private val context: Context) {
     /**
      * 标签索引页上的数字是「标注人数」（全站有多少人给条目打过这个标签），
      * 与该标签下实际有多少条目（点进去列表能翻到的条数）完全不是一个量级——
-     * 例如「宫崎骏」标注人数 3.9 万、动画条目实际只有 62 条。
+     * 例如「宫崎骏」标注人数 3.9 万、动画条目实际 82 条。
      *
-     * 真实条目数只有 v0 搜索能算：空关键词 + filter.tag 时返回的 total 即该标签的条目数
-     * （实测动画 62 / 书籍 29 / 音乐 7 / 三次元 13，与网页标签页逐页翻出来的条数一致）。
-     * 单次请求约 0.4~1.2 秒、响应 3~8KB，100 个标签串行约 1 分钟——故只在标签索引页
-     * 按可见批次并发补齐，不做全量预取。
+     * 条目数只能从网页标签页本身算：v0 搜索 filter.tag 的索引残缺不可信
+     * （「宫崎骏」返回 total=62，结果里连千与千寻都没有；网页实际 82 条）。
+     * 网页每页固定 24 条且不输出总数，故需两个请求：第 1 页拿总页数、末页拿余数，
+     * 总数 = (总页数-1)*24 + 末页条数；单页标签只需第 1 页。
+     * 单标签约 0.5~2s、每页 HTML 30~60KB，由标签索引页 6 并发分批补齐、边取边显示。
      */
     suspend fun getTagSubjectCount(type: Int, tag: String): Int? {
         return runCatching {
-            client.post("/v0/search/subjects") {
-                url {
-                    parameters.append("limit", "1")
-                    parameters.append("offset", "0")
-                }
-                contentType(ContentType.Application.Json)
-                setBody(
-                    SearchRequest(
-                        keyword = "",
-                        sort = "rank",
-                        filter = SearchFilter(type = listOf(type), tag = listOf(tag))
-                    )
-                )
-                withAuth()
-            }.body<PagedSubject>().total
+            val first = browseByTag(type, tag, page = 1)
+            // webClient 对非 2xx 不抛错，错误体会被解析成 0 条——真实存在的标签不该为空，
+            // 返回 null 避免把错误数字写进缓存
+            if (first.subjects.isEmpty()) return@runCatching null
+            if (first.totalPages <= 1) return@runCatching first.subjects.size
+            val last = browseByTag(type, tag, page = first.totalPages)
+            if (last.subjects.isEmpty()) return@runCatching null
+            (first.totalPages - 1) * 24 + last.subjects.size
         }.getOrNull()
     }
 
