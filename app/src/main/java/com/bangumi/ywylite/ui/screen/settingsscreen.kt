@@ -23,6 +23,14 @@ import android.os.Build
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 
+/** 字体大小档位：系统字号基础上的乘率 */
+private val fontScaleOptions = listOf(
+    0.85f to "小",
+    1.0f to "标准",
+    1.2f to "大",
+    1.4f to "特大"
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -43,6 +51,10 @@ fun SettingsScreen(
     val collectionWaterfall by app.settings.collectionWaterfall.collectAsState(initial = false)
     var showDefaultTabDialog by remember { mutableStateOf(false) }
     var showCollectionStyleDialog by remember { mutableStateOf(false) }
+
+    // 字体大小（标签页豁免，不随缩放）
+    val fontScale by app.settings.fontScale.collectAsState(initial = 1f)
+    var showFontSizeDialog by remember { mutableStateOf(false) }
 
     // 官方 API / Web 端域名切换
     val apiHosts = listOf(
@@ -144,6 +156,42 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showCollectionStyleDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showFontSizeDialog) {
+        AlertDialog(
+            onDismissRequest = { showFontSizeDialog = false },
+            title = { Text("字体大小") },
+            text = {
+                Column {
+                    fontScaleOptions.forEach { (value, label) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch { app.settings.saveFontScale(value) }
+                                    showFontSizeDialog = false
+                                }
+                                .padding(vertical = 8.dp)
+                        ) {
+                            RadioButton(
+                                selected = fontScale == value,
+                                onClick = {
+                                    scope.launch { app.settings.saveFontScale(value) }
+                                    showFontSizeDialog = false
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(label)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showFontSizeDialog = false }) { Text("取消") }
             }
         )
     }
@@ -294,6 +342,12 @@ fun SettingsScreen(
                     title = "收藏页样式",
                     subtitle = if (collectionWaterfall) "瀑布流（与浏览页一致）" else "列表（经典）",
                     onClick = { showCollectionStyleDialog = true }
+                )
+                SettingsItem(
+                    icon = Icons.Default.FormatSize,
+                    title = "字体大小",
+                    subtitle = fontScaleOptions.firstOrNull { it.first == fontScale }?.second ?: "标准",
+                    onClick = { showFontSizeDialog = true }
                 )
             }
 

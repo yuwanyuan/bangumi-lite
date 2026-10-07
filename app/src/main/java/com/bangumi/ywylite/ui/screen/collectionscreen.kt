@@ -1,5 +1,6 @@
 package com.bangumi.ywylite.ui.screen
 
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -15,10 +16,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
@@ -26,6 +29,7 @@ import com.bangumi.ywylite.data.model.PagedUserCollection
 import com.bangumi.ywylite.data.model.UserCollection
 import com.bangumi.ywylite.ui.component.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 /** 加载更多 footer：列表与瀑布流两种容器共用 */
 @Composable
@@ -44,6 +48,15 @@ private fun CollectionLoadMoreFooter(loadMoreError: Boolean, onRetry: () -> Unit
     }
 }
 
+/**
+ * 进程级收藏列表缓存：底栏左右切换回页时直接恢复、不重新请求；冷启动为空 → 首次进入必然拉新。
+ * 筛选切换/下拉刷新成功后覆盖。刷新/加载中的瞬态不写入。
+ */
+private var cachedCollectionState: CollectionUiState? = null
+
+/** 缓存归属的用户名：换账号登录后旧缓存作废，避免新账号先看到上一个账号的收藏 */
+private var cachedCollectionUsername: String? = null
+
 data class CollectionUiState(
     val loading: Boolean = true,
     val data: List<UserCollection> = emptyList(),
@@ -59,7 +72,9 @@ data class CollectionUiState(
     /** 加载更多重试信号 */
     val loadMoreKey: Int = 0,
     /** 加载更多失败标记：显示"点击重试"替代永久转圈 */
-    val loadMoreError: Boolean = false
+    val loadMoreError: Boolean = false,
+    /** 下拉刷新进行中：顶部转圈、旧列表保持可见（与整页 loading 区分） */
+    val refreshing: Boolean = false
 )
 
 private val collectionTypes = listOf(
@@ -89,12 +104,55 @@ fun CollectionScreen(
 ) {
     val app = App.INSTANCE
     val scope = rememberCoroutineScope()
-    var uiState by remember { mutableStateOf(CollectionUiState()) }
+    val context = LocalContext.current
+    var uiState by remember { mutableStateOf(cachedCollectionState ?: CollectionUiState()) }
+    // 恢复的缓存归属用户（null = 无缓存）；主加载效应首次拿到用户名时判定缓存是否可用
+    var restoredUsername by remember {
+        mutableStateOf(if (cachedCollectionState != null) cachedCollectionUsername else null)
+    }
     var username by remember { mutableStateOf<String?>(null) }
     // 条目样式：瀑布流（与浏览页一致）或经典列表，设置页可随时切换
     val waterfall by app.settings.collectionWaterfall.collectAsState(initial = false)
     val listState = rememberLazyListState()
     val gridState = rememberLazyStaggeredGridState()
+
+    // 状态落定即写入进程缓存；加载/刷新中的瞬态不入缓存，切页回来不会停在中间态
+    LaunchedEffect(uiState) {
+        if (!uiState.loading && !uiState.refreshing) {
+            cachedCollectionState = uiState
+            username?.let { cachedCollectionUsername = it }
+        }
+    }
+
+    // 下拉刷新：整表替换回第一页。item 按条目 id 复用、封面 URL 归一化稳定，
+    // 未变化的图片由 Coil 内存缓存直接命中，不会二次下载
+    val refresh: () -> Unit = {
+        scope.launch {
+            val u = username ?: return@launch
+            uiState = uiState.copy(refreshing = true)
+            try {
+                val result = app.api.getUserCollections(
+                    u,
+                    subjectType = uiState.selectedSubjectType,
+                    collectionType = uiState.selectedType,
+                    offset = 0
+                )
+                uiState = uiState.copy(
+                    refreshing = false,
+                    data = result.data.distinctBy { it.subjectId },
+                    total = result.total,
+                    offset = result.data.size,
+                    hasMore = result.data.size < result.total,
+                    loadMoreError = false
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                uiState = uiState.copy(refreshing = false)
+                Toast.makeText(context, "刷新失败", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         app.settings.username.collect { name -> username = name }
@@ -104,6 +162,12 @@ fun CollectionScreen(
         if (username == null) {
             uiState = uiState.copy(loading = false)
             return@LaunchedEffect
+        }
+        // 首次拿到用户名时结算缓存：命中同账号 → 跳过首拉读缓存；无缓存/换号 → 正常拉取
+        val restored = restoredUsername
+        if (restored != null) {
+            restoredUsername = null
+            if (restored == username) return@LaunchedEffect
         }
         val currentUsername = username!!
         uiState = uiState.copy(loading = true, offset = 0, error = null, loadMoreError = false)
@@ -248,6 +312,11 @@ fun CollectionScreen(
                     }
                 }
 
+                PullToRefreshBox(
+                    isRefreshing = uiState.refreshing,
+                    onRefresh = refresh,
+                    modifier = Modifier.fillMaxSize()
+                ) {
                 when {
                     uiState.loading -> LoadingView()
                     uiState.error != null -> ErrorView(
@@ -352,6 +421,7 @@ fun CollectionScreen(
                         }
                         }
                     }
+                }
                 }
             }
         }

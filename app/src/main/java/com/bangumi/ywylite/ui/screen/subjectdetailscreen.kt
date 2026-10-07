@@ -123,6 +123,14 @@ data class SubjectDetailUiState(
     val webInfobox: List<InfoboxItem> = emptyList()
 )
 
+/**
+ * 进程级详情缓存（LRU，上限 8 条）：再次进入同一条目先展示上次数据、后台静默拉新。
+ * 增量刷新——页面不闪整页加载屏；封面等图片 URL 未变时 Coil 直接命中缓存，不二次请求。
+ */
+private val detailCache = object : LinkedHashMap<Int, SubjectDetailUiState>(16, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, SubjectDetailUiState>) = size > 8
+}
+
 val collectionTypeColors = mapOf(
     1 to Color(0xFF2196F3),
     2 to Color(0xFF4CAF50),
@@ -149,7 +157,14 @@ fun SubjectDetailScreen(
 ) {
     val app = App.INSTANCE
     val scope = rememberCoroutineScope()
-    var uiState by remember { mutableStateOf(SubjectDetailUiState()) }
+    // 命中进程缓存 → 先展示旧数据（跳过整页 loading），后台增量拉新；未命中 → 正常整页加载
+    val hasCachedDetail = detailCache.containsKey(subjectId)
+    var uiState by remember(subjectId) {
+        mutableStateOf(
+            if (hasCachedDetail) detailCache[subjectId]!!.copy(loading = false, error = null)
+            else SubjectDetailUiState()
+        )
+    }
     val token by app.settings.accessToken.collectAsState(initial = null)
     val username by app.settings.username.collectAsState(initial = null)
     val snackbarHostState = remember { SnackbarHostState() }
@@ -205,10 +220,10 @@ fun SubjectDetailScreen(
         snackbarHostState.showSnackbar("收藏状态获取失败，请检查网络后重试")
     }
 
-    // 全量加载详情与关联数据：首次进入与「重试」共用。
+    // 全量加载详情与关联数据：首次进入（整页 loading）、「重试」与缓存后增量刷新（后台静默）共用。
     // 原先重试只重新拉 subject，章节/角色/信息盒仍是失败时的空值，页面残缺
-    val loadAll: suspend () -> Unit = {
-        uiState = uiState.copy(loading = true, error = null)
+    val loadAll: suspend (background: Boolean) -> Unit = load@{ background ->
+        if (!background) uiState = uiState.copy(loading = true, error = null)
         try {
             val subject = app.api.getSubject(subjectId)
             // getAllEpisodes 内部循环翻页：长番（>100 集）此前只拿到第一页
@@ -228,13 +243,21 @@ fun SubjectDetailScreen(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            uiState = uiState.copy(loading = false, error = e.message)
+            // 增量刷新失败：旧数据照常展示，不把正在看的页面打成错误页
+            if (!background) uiState = uiState.copy(loading = false, error = e.message)
         }
     }
 
-    LaunchedEffect(subjectId) { loadAll() }
+    LaunchedEffect(subjectId) { loadAll(!hasCachedDetail) }
 
     LaunchedEffect(subjectId, token, username) { syncCollection() }
+
+    // 详情数据落定即写进程缓存，下次进入同一条目走增量刷新
+    LaunchedEffect(uiState) {
+        if (!uiState.loading && uiState.error == null && uiState.subject != null) {
+            detailCache[subjectId] = uiState
+        }
+    }
 
     when {
         uiState.loading -> Scaffold(
@@ -264,7 +287,7 @@ fun SubjectDetailScreen(
             ErrorView(
                 message = uiState.error ?: "加载失败",
                 onRetry = {
-                    scope.launch { loadAll() }
+                    scope.launch { loadAll(false) }
                 },
                 modifier = Modifier.padding(padding)
             )

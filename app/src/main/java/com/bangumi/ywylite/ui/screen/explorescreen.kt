@@ -1,5 +1,6 @@
 package com.bangumi.ywylite.ui.screen
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
@@ -11,9 +12,11 @@ import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
@@ -22,6 +25,7 @@ import com.bangumi.ywylite.data.model.PagedSubject
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 data class ExploreUiState(
     val loading: Boolean = true,
@@ -38,8 +42,16 @@ data class ExploreUiState(
     /** 加载更多重试信号 */
     val loadMoreKey: Int = 0,
     /** 加载更多失败标记：显示"点击重试"替代永久转圈 */
-    val loadMoreError: Boolean = false
+    val loadMoreError: Boolean = false,
+    /** 下拉刷新进行中：顶部转圈、旧列表保持可见（与整页 loading 区分） */
+    val refreshing: Boolean = false
 )
+
+/**
+ * 进程级列表缓存：底栏左右切换（saveState/restoreState）回页时直接恢复、不重新请求；
+ * 冷启动为空 → 首次进入必然拉新。筛选切换/下拉刷新成功后覆盖。
+ */
+private var cachedExploreState: ExploreUiState? = null
 
 private val subjectTypes = listOf(
     2 to "动画",
@@ -86,8 +98,46 @@ fun ExploreScreen(
     onNavigateToCalendar: () -> Unit = {}
 ) {
     val app = App.INSTANCE
-    var uiState by remember { mutableStateOf(ExploreUiState()) }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    // 有进程缓存就先上缓存，并跳过本次进入的自动首拉（筛选/重试/下拉刷新仍会正常请求）
+    var uiState by remember { mutableStateOf(cachedExploreState ?: ExploreUiState()) }
+    var skipAutoLoad by remember { mutableStateOf(cachedExploreState != null) }
     val gridState = rememberLazyStaggeredGridState()
+
+    // 状态落定即写入进程缓存；加载/刷新中的瞬态不入缓存，切页回来不会停在中间态
+    LaunchedEffect(uiState) {
+        if (!uiState.loading && !uiState.refreshing) cachedExploreState = uiState
+    }
+
+    // 下拉刷新：整表替换回第一页。item 按条目 id 复用、封面 URL 归一化稳定，
+    // 未变化的图片由 Coil 内存缓存直接命中，不会二次下载
+    val refresh: () -> Unit = {
+        scope.launch {
+            uiState = uiState.copy(refreshing = true)
+            try {
+                val result = fetchBrowsePage(
+                    api = app.api,
+                    type = uiState.selectedType,
+                    sort = uiState.selectedSort,
+                    offset = 0
+                )
+                uiState = uiState.copy(
+                    refreshing = false,
+                    data = result.data.distinctBy { it.id },
+                    offset = result.data.size,
+                    hasMore = result.data.size < result.total,
+                    total = result.total,
+                    loadMoreError = false
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                uiState = uiState.copy(refreshing = false)
+                Toast.makeText(context, "刷新失败", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     // 滚动接近底部时加载下一页（替代 footer 内 LaunchedEffect：
     // footer item 随数据追加会被 LazyGrid 重建，旧写法会连环拉完全部数据且失败静默）
@@ -125,6 +175,11 @@ fun ExploreScreen(
     }
 
     LaunchedEffect(uiState.selectedType, uiState.selectedSort, uiState.retryKey) {
+        // 刚从进程缓存恢复时跳过自动首拉；此后筛选变化/重试正常触发
+        if (skipAutoLoad) {
+            skipAutoLoad = false
+            return@LaunchedEffect
+        }
         uiState = uiState.copy(loading = true, offset = 0, error = null, loadMoreError = false)
         try {
             val result = fetchBrowsePage(
@@ -203,6 +258,11 @@ fun ExploreScreen(
                 }
             }
 
+            PullToRefreshBox(
+                isRefreshing = uiState.refreshing,
+                onRefresh = refresh,
+                modifier = Modifier.fillMaxSize()
+            ) {
             LazyVerticalStaggeredGrid(
                 // 自适应列宽：窄屏 3 列左右，平板自动多列
                 columns = StaggeredGridCells.Adaptive(110.dp),
@@ -263,6 +323,7 @@ fun ExploreScreen(
                         }
                     }
                 }
+            }
             }
         }
     }

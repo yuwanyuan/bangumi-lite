@@ -30,6 +30,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Authenticator
 import okhttp3.Cache
+import okhttp3.CacheControl
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.Credentials
@@ -82,6 +83,13 @@ class BangumiApi(private val context: Context) {
         const val USER_AGENT = "BGMLite/1.2 (Android; +https://github.com/yuwanyuan/bangumi-lite)"
         private const val NETWORK_CACHE_DIR = "network_cache"
         private const val NETWORK_CACHE_SIZE = 20L * 1024 * 1024
+
+        /**
+         * 请求标记头：命中后拦截器把请求改写为 FORCE_NETWORK。
+         * api.bgm.tv 响应带 Cache-Control: public, max-age=3600，不旁路的话
+         * 下拉刷新/详情页刷新在一小时内只会从磁盘缓存拿到旧数据。
+         */
+        private const val FORCE_NETWORK_HEADER = "X-BGMLite-Force-Network"
         private val WEB_COOKIES_KEY = stringPreferencesKey("web_session_cookies")
     }
 
@@ -89,13 +97,20 @@ class BangumiApi(private val context: Context) {
      * 全部 Ktor 客户端共享的 OkHttp 基座（连接池/缓存复用）。
      * - 统一注入默认 User-Agent（请求自带 UA 时不覆盖）
      * - 启用 HTTP 缓存：此前未配置 Cache，缓存设置页里 network_cache 恒为 0
+     * - 带 [FORCE_NETWORK_HEADER] 的请求强制回源（响应仍回写缓存，其余请求照常受益）
      * rebuildClients 用 newBuilder() 派生新客户端，保证 4 个客户端共用同一份缓存
      * （OkHttp 不允许两个 Cache 实例指向同一目录，会写坏日志）。
      */
     private val baseOkHttp: OkHttpClient = OkHttpClient.Builder()
         .cache(Cache(File(context.cacheDir, NETWORK_CACHE_DIR), NETWORK_CACHE_SIZE))
         .addInterceptor { chain ->
-            val request = chain.request()
+            var request = chain.request()
+            if (request.header(FORCE_NETWORK_HEADER) != null) {
+                request = request.newBuilder()
+                    .cacheControl(CacheControl.FORCE_NETWORK)
+                    .removeHeader(FORCE_NETWORK_HEADER)
+                    .build()
+            }
             if (request.header("User-Agent") != null) {
                 chain.proceed(request)
             } else {
@@ -498,6 +513,8 @@ class BangumiApi(private val context: Context) {
 
     suspend fun getSubject(id: Int): Subject {
         return client.get("/v0/subjects/${id}") {
+            // 详情页每次进入都要刷新（增量：先展示进程缓存，这里后台回源）
+            headers { append(FORCE_NETWORK_HEADER, "1") }
             withAuth()
         }.body()
     }
@@ -508,7 +525,10 @@ class BangumiApi(private val context: Context) {
      */
     suspend fun getSubjectWebInfobox(subjectId: Int): List<InfoboxItem> {
         val html = webClient.get("/subject/${subjectId}") {
-            headers { append(HttpHeaders.UserAgent, "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 ywylite") }
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 ywylite")
+                append(FORCE_NETWORK_HEADER, "1")
+            }
         }.bodyAsText()
         return parseInfoboxHtml(html)
     }
@@ -626,6 +646,7 @@ class BangumiApi(private val context: Context) {
         limit: Int = 100
     ): PagedEpisode {
         return client.get("/v0/episodes") {
+            headers { append(FORCE_NETWORK_HEADER, "1") }
             url {
                 parameters.append("subject_id", subjectId.toString())
                 type?.let { parameters.append("type", it.toString()) }
@@ -669,6 +690,7 @@ class BangumiApi(private val context: Context) {
         limit: Int = 30
     ): PagedUserCollection {
         return client.get("/v0/users/${username}/collections") {
+            headers { append(FORCE_NETWORK_HEADER, "1") }
             url {
                 subjectType?.let { parameters.append("subject_type", it.toString()) }
                 collectionType?.let { parameters.append("type", it.toString()) }
@@ -720,6 +742,7 @@ class BangumiApi(private val context: Context) {
     suspend fun getSubjectCollection(username: String, subjectId: Int, accessToken: String? = null): UserCollection? {
         return try {
             client.get("/v0/users/${username}/collections/${subjectId}") {
+                headers { append(FORCE_NETWORK_HEADER, "1") }
                 if (!accessToken.isNullOrBlank()) {
                     header("Authorization", "Bearer $accessToken")
                 }
@@ -735,6 +758,7 @@ class BangumiApi(private val context: Context) {
         limit: Int = 20
     ): CommentResponse {
         return nextClient.get("/p1/subjects/${subjectId}/comments") {
+            headers { append(FORCE_NETWORK_HEADER, "1") }
             url {
                 parameters.append("offset", offset.toString())
                 parameters.append("limit", limit.toString())
@@ -744,12 +768,14 @@ class BangumiApi(private val context: Context) {
 
     suspend fun getRelatedSubjects(subjectId: Int): List<RelatedSubject> {
         return client.get("/v0/subjects/${subjectId}/subjects") {
+            headers { append(FORCE_NETWORK_HEADER, "1") }
             withAuth()
         }.body()
     }
 
     suspend fun getSubjectCharacters(subjectId: Int): List<CharacterItem> {
         return client.get("/v0/subjects/${subjectId}/characters") {
+            headers { append(FORCE_NETWORK_HEADER, "1") }
             withAuth()
         }.body()
     }
@@ -761,6 +787,7 @@ class BangumiApi(private val context: Context) {
         accessToken: String? = null
     ): List<EpisodeCollection> {
         val response = client.get("/v0/users/-/collections/${subjectId}/episodes") {
+            headers { append(FORCE_NETWORK_HEADER, "1") }
             val bearer = accessToken ?: this@BangumiApi.accessToken
             if (bearer != null) {
                 header("Authorization", "Bearer $bearer")
@@ -1049,6 +1076,7 @@ class BangumiApi(private val context: Context) {
         limit: Int = 30
     ): PagedSubject {
         return client.get("/v0/subjects") {
+            headers { append(FORCE_NETWORK_HEADER, "1") }
             url {
                 parameters.append("type", type.toString())
                 if (cat.isNotEmpty()) parameters.append("cat", cat)
@@ -1106,6 +1134,7 @@ class BangumiApi(private val context: Context) {
         airDateFrom: String?
     ): PagedSubject {
         return client.post("/v0/search/subjects") {
+            headers { append(FORCE_NETWORK_HEADER, "1") }
             url {
                 parameters.append("offset", offset.toString())
                 parameters.append("limit", limit.toString())

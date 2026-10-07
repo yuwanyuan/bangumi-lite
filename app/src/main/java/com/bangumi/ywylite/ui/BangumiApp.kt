@@ -9,11 +9,14 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
@@ -41,6 +44,20 @@ val bottomNavItems = listOf(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BangumiApp() {
+    val app = App.INSTANCE
+    val fontScale by app.settings.fontScale.collectAsState(initial = 1f)
+    // 全局字体缩放：在系统字号基础上乘以应用内倍率（sp 生效、dp 不动）。
+    // 标签页要求字体不随设置缩放，其组合处用 baseDensity 恢复原始密度
+    val systemDensity = LocalDensity.current
+    CompositionLocalProvider(
+        LocalDensity provides Density(systemDensity.density, systemDensity.fontScale * fontScale)
+    ) {
+        BangumiAppContent(baseDensity = Density(systemDensity.density, systemDensity.fontScale))
+    }
+}
+
+@Composable
+private fun BangumiAppContent(baseDensity: Density) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
@@ -201,14 +218,17 @@ fun BangumiApp() {
                 arguments = listOf(navArgument("typePath") { type = NavType.StringType })
             ) { backStackEntry ->
                 val typePath = backStackEntry.arguments?.getString("typePath") ?: "anime"
-                TagsScreen(
-                    typePath = typePath,
-                    api = app.api,
-                    onBack = { navController.popBackStack() },
-                    onNavigateToTagBrowse = { tagName, tagSlug, type ->
-                        navController.navigate(Route.TagBrowse.create(tagName, tagSlug, type))
-                    }
-                )
+                // 标签页字体不随应用内缩放：恢复系统原始密度
+                CompositionLocalProvider(LocalDensity provides baseDensity) {
+                    TagsScreen(
+                        typePath = typePath,
+                        api = app.api,
+                        onBack = { navController.popBackStack() },
+                        onNavigateToTagBrowse = { tagName, tagSlug, type ->
+                            navController.navigate(Route.TagBrowse.create(tagName, tagSlug, type))
+                        }
+                    )
+                }
             }
             composable(
                 route = Route.TagBrowse.path,
@@ -225,16 +245,19 @@ fun BangumiApp() {
                     java.net.URLDecoder.decode(it, "UTF-8")
                 } ?: ""
                 val type = backStackEntry.arguments?.getInt("type") ?: 2
-                TagBrowseScreen(
-                    tagName = tagName,
-                    tagSlug = tagSlug,
-                    type = type,
-                    api = app.api,
-                    onBack = { navController.popBackStack() },
-                    onSubjectClick = { id ->
-                        navController.navigate(Route.SubjectDetail.create(id))
-                    }
-                )
+                // 标签浏览页与标签页同属标签流，同样豁免字体缩放
+                CompositionLocalProvider(LocalDensity provides baseDensity) {
+                    TagBrowseScreen(
+                        tagName = tagName,
+                        tagSlug = tagSlug,
+                        type = type,
+                        api = app.api,
+                        onBack = { navController.popBackStack() },
+                        onSubjectClick = { id ->
+                            navController.navigate(Route.SubjectDetail.create(id))
+                        }
+                    )
+                }
             }
         }
     }

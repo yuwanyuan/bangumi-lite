@@ -103,6 +103,11 @@ class Settings(private val context: Context) {
         prefs[COLLECTION_WATERFALL_KEY] ?: false
     }
 
+    /** 全局字体缩放倍率（1.0=标准，跟随系统字号基础上相乘；标签页豁免） */
+    val fontScale: Flow<Float> = context.dataStore.data.map { prefs ->
+        prefs[FONT_SCALE_KEY] ?: 1f
+    }
+
     suspend fun saveToken(token: String) {
         context.dataStore.edit { prefs ->
             prefs[ACCESS_TOKEN_KEY] = token
@@ -208,6 +213,12 @@ class Settings(private val context: Context) {
         }
     }
 
+    suspend fun saveFontScale(scale: Float) {
+        context.dataStore.edit { prefs ->
+            prefs[FONT_SCALE_KEY] = scale
+        }
+    }
+
     companion object {
         private val ACCESS_TOKEN_KEY = stringPreferencesKey("access_token")
         private val USERNAME_KEY = stringPreferencesKey("username")
@@ -225,5 +236,6 @@ class Settings(private val context: Context) {
         private val DYNAMIC_COLOR_KEY = booleanPreferencesKey("dynamic_color")
     private val DEFAULT_TAB_KEY = stringPreferencesKey("default_tab")
     private val COLLECTION_WATERFALL_KEY = booleanPreferencesKey("collection_waterfall")
+    private val FONT_SCALE_KEY = floatPreferencesKey("font_scale")
     }
 }

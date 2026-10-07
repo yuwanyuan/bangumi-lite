@@ -1,5 +1,11 @@
 package com.bangumi.ywylite.ui.screen
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,7 +24,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -38,8 +47,6 @@ data class TagsUiState(
     /** 已加载到的索引页号（0 = 尚未加载；网页索引每页 100 个标签、按标注人数排序） */
     val page: Int = 0,
     val totalPages: Int = Int.MAX_VALUE,
-    /** 分段加载进行中（滑到底触发的下一页请求） */
-    val loadingMore: Boolean = false,
     val loadMoreError: Boolean = false,
     /** 顶部搜索框展开中 */
     val searching: Boolean = false,
@@ -97,7 +104,6 @@ fun TagsScreen(
                 tags = cached.tags,
                 page = cached.page,
                 totalPages = cached.totalPages,
-                loadingMore = false,
                 loadMoreError = false
             )
         } else {
@@ -119,15 +125,16 @@ fun TagsScreen(
         }
     }
 
-    // 滑到底自动加载下一页索引（同 TagBrowseScreen：滚动位置检测 + 显式失败重试，
-    // footer 内 LaunchedEffect 会被数据追加重建导致连环翻页）
+    // 滑到底自动加载下一页索引（同 TagBrowseScreen：滚动位置检测 + 显式失败重试）。
+    // 注意不要在这里引入「loading 中间状态位」：effect 一改状态 nearEnd 就翻 false，
+    // key 变化会取消正在进行的请求且该状态永远等不到复位——此前分段加载因此完全失效
     val nearEnd by remember {
         derivedStateOf {
             val info = gridState.layoutInfo
             val lastVisible = info.visibleItemsInfo.maxOfOrNull { it.index } ?: -1
             !uiState.loading && uiState.error == null && uiState.tags.isNotEmpty() &&
                 uiState.searchQuery.isBlank() &&
-                uiState.page < uiState.totalPages && !uiState.loadingMore && !uiState.loadMoreError &&
+                uiState.page < uiState.totalPages && !uiState.loadMoreError &&
                 lastVisible >= info.totalItemsCount - 4
         }
     }
@@ -137,7 +144,6 @@ fun TagsScreen(
         val path = tagsTypePaths[type] ?: "anime"
         val currentTags = uiState.tags
         val nextPage = uiState.page + 1
-        uiState = uiState.copy(loadingMore = true)
         try {
             val result = api.getTagIndexPage(path, page = nextPage)
             val merged = (currentTags + result.tags).distinctBy { it.name }
@@ -150,17 +156,14 @@ fun TagsScreen(
                     tags = merged.map { it.copy(subjectCount = tagSubjectCountCache["$path|${it.name}"] ?: -1) },
                     page = result.page,
                     totalPages = effectiveTotalPages,
-                    loadingMore = false,
                     loadMoreError = false
                 )
-            } else {
-                uiState = uiState.copy(loadingMore = false)
             }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             if (uiState.selectedType == type) {
-                uiState = uiState.copy(loadingMore = false, loadMoreError = true)
+                uiState = uiState.copy(loadMoreError = true)
             }
         }
     }
@@ -199,27 +202,74 @@ fun TagsScreen(
         else uiState.tags.filter { it.name.contains(searchQuery, ignoreCase = true) }
     }
 
+    val searchFocusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    LaunchedEffect(uiState.searching) {
+        if (uiState.searching) searchFocusRequester.requestFocus()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("标签") },
+                title = {
+                    // 点搜索：搜索框（含放大镜）从右侧滑入占据标题区，放大镜停在框内左端，
+                    // 框的右端（放大镜原来的位置）是关闭叉号
+                    AnimatedContent(
+                        targetState = uiState.searching,
+                        transitionSpec = {
+                            if (targetState) {
+                                (slideInHorizontally { it } + fadeIn()) togetherWith
+                                    (slideOutHorizontally { -it } + fadeOut())
+                            } else {
+                                (slideInHorizontally { -it } + fadeIn()) togetherWith
+                                    (slideOutHorizontally { it } + fadeOut())
+                            }
+                        },
+                        label = "tagSearchBar"
+                    ) { searching ->
+                        if (searching) {
+                            TextField(
+                                value = uiState.searchQuery,
+                                onValueChange = { uiState = uiState.copy(searchQuery = it) },
+                                placeholder = { Text("输入标签名过滤已加载的标签") },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.Search, contentDescription = null)
+                                },
+                                trailingIcon = {
+                                    IconButton(onClick = {
+                                        focusManager.clearFocus()
+                                        uiState = uiState.copy(searching = false, searchQuery = "")
+                                    }) {
+                                        Icon(Icons.Filled.Close, contentDescription = "关闭搜索")
+                                    }
+                                },
+                                singleLine = true,
+                                shape = RoundedCornerShape(24.dp),
+                                colors = TextFieldDefaults.colors(
+                                    focusedIndicatorColor = Color.Transparent,
+                                    unfocusedIndicatorColor = Color.Transparent,
+                                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(searchFocusRequester)
+                            )
+                        } else {
+                            Text("标签")
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        uiState = if (uiState.searching) {
-                            uiState.copy(searching = false, searchQuery = "")
-                        } else {
-                            uiState.copy(searching = true)
+                    if (!uiState.searching) {
+                        IconButton(onClick = { uiState = uiState.copy(searching = true) }) {
+                            Icon(Icons.Filled.Search, contentDescription = "搜索标签")
                         }
-                    }) {
-                        Icon(
-                            if (uiState.searching) Icons.Filled.Close else Icons.Filled.Search,
-                            contentDescription = if (uiState.searching) "关闭搜索" else "搜索标签"
-                        )
                     }
                 }
             )
@@ -260,18 +310,6 @@ fun TagsScreen(
             }
 
             HorizontalDivider()
-
-            if (uiState.searching) {
-                OutlinedTextField(
-                    value = uiState.searchQuery,
-                    onValueChange = { uiState = uiState.copy(searchQuery = it) },
-                    placeholder = { Text("输入标签名过滤已加载的标签") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                )
-            }
 
             when {
                 uiState.loading -> {
