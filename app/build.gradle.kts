@@ -20,7 +20,7 @@ android {
         val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
         val tagVersion = System.getenv("APP_VERSION_NAME")?.takeIf { it.isNotBlank() }?.removePrefix("v")
         versionCode = runNumber ?: 2
-        versionName = tagVersion ?: "1.2.0-dev.${runNumber ?: 1}"
+        versionName = tagVersion ?: "1.2.1-dev.${runNumber ?: 1}"
     }
 
     signingConfigs {
