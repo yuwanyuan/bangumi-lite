@@ -14,6 +14,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
@@ -26,6 +27,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.bangumi.ywylite.App
+import com.bangumi.ywylite.ui.component.AppBackground
 import com.bangumi.ywylite.ui.navigation.Route
 import com.bangumi.ywylite.ui.screen.*
 
@@ -66,7 +68,15 @@ private fun BangumiAppContent(baseDensity: Density) {
     val token by app.settings.accessToken.collectAsState(initial = null)
     val ready by app.appReady.collectAsState()
 
+    // 主界面背景图设置（除详情页外所有页面透出）
+    val bgSource by app.settings.backgroundSource.collectAsState(initial = "none")
+    val bgMaskPreset by app.settings.backgroundMaskPreset.collectAsState(initial = "medium")
+    val bgMaskAlpha by app.settings.backgroundMaskAlpha.collectAsState(initial = 60)
+    val bgCustomUri by app.settings.backgroundCustomUri.collectAsState(initial = null)
+
     val showBottomBar = bottomNavItems.any { it.route == currentDestination?.route }
+    // 详情页自带封面背景，不透出主界面背景图
+    val showAppBackground = currentDestination?.route != Route.SubjectDetail.path
 
     if (!ready) {
         // 配置恢复（token/域名/代理）完成前不渲染页面，避免带默认直连配置抢先发请求
@@ -76,7 +86,17 @@ private fun BangumiAppContent(baseDensity: Density) {
         return
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (showAppBackground) {
+            AppBackground(
+                source = bgSource,
+                maskPreset = bgMaskPreset,
+                maskAlpha = bgMaskAlpha,
+                customUri = bgCustomUri
+            )
+        }
     Scaffold(
+        containerColor = Color.Transparent,
         bottomBar = {
             if (showBottomBar) {
                 NavigationBar {
@@ -260,5 +280,6 @@ private fun BangumiAppContent(baseDensity: Density) {
                 }
             }
         }
+    }
     }
 }

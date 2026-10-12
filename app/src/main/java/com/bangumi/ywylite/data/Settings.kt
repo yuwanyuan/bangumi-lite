@@ -108,6 +108,30 @@ class Settings(private val context: Context) {
         prefs[FONT_SCALE_KEY] ?: 1f
     }
 
+    /**
+     * 主界面背景图图源：
+     * "none"=无背景（默认，纯色），"calendar"=每日放送封面拼图，
+     * "explore"=浏览页热门封面，"custom"=用户从相册选的固定图
+     */
+    val backgroundSource: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[BACKGROUND_SOURCE_KEY] ?: "none"
+    }
+
+    /** 背景蒙版档位："light"/"medium"/"dark"，决定压在背景图上的半透明色层强度 */
+    val backgroundMaskPreset: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[BACKGROUND_MASK_PRESET_KEY] ?: "medium"
+    }
+
+    /** 背景蒙版透明度 0–100，配合档位微调；档位切换会覆盖此值，手动调时独立生效 */
+    val backgroundMaskAlpha: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[BACKGROUND_MASK_ALPHA_KEY] ?: 60
+    }
+
+    /** 用户自选背景图的本地 URI（图源为 custom 时生效） */
+    val backgroundCustomUri: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[BACKGROUND_CUSTOM_URI_KEY]
+    }
+
     suspend fun saveToken(token: String) {
         context.dataStore.edit { prefs ->
             prefs[ACCESS_TOKEN_KEY] = token
@@ -219,6 +243,31 @@ class Settings(private val context: Context) {
         }
     }
 
+    suspend fun saveBackgroundSource(source: String) {
+        context.dataStore.edit { prefs ->
+            prefs[BACKGROUND_SOURCE_KEY] = source
+        }
+    }
+
+    suspend fun saveBackgroundMaskPreset(preset: String) {
+        context.dataStore.edit { prefs ->
+            prefs[BACKGROUND_MASK_PRESET_KEY] = preset
+        }
+    }
+
+    suspend fun saveBackgroundMaskAlpha(alpha: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[BACKGROUND_MASK_ALPHA_KEY] = alpha.coerceIn(0, 100)
+        }
+    }
+
+    suspend fun saveBackgroundCustomUri(uri: String?) {
+        context.dataStore.edit { prefs ->
+            if (uri != null) prefs[BACKGROUND_CUSTOM_URI_KEY] = uri
+            else prefs.remove(BACKGROUND_CUSTOM_URI_KEY)
+        }
+    }
+
     companion object {
         private val ACCESS_TOKEN_KEY = stringPreferencesKey("access_token")
         private val USERNAME_KEY = stringPreferencesKey("username")
@@ -237,5 +286,9 @@ class Settings(private val context: Context) {
     private val DEFAULT_TAB_KEY = stringPreferencesKey("default_tab")
     private val COLLECTION_WATERFALL_KEY = booleanPreferencesKey("collection_waterfall")
     private val FONT_SCALE_KEY = floatPreferencesKey("font_scale")
+    private val BACKGROUND_SOURCE_KEY = stringPreferencesKey("background_source")
+    private val BACKGROUND_MASK_PRESET_KEY = stringPreferencesKey("background_mask_preset")
+    private val BACKGROUND_MASK_ALPHA_KEY = intPreferencesKey("background_mask_alpha")
+    private val BACKGROUND_CUSTOM_URI_KEY = stringPreferencesKey("background_custom_uri")
     }
 }

@@ -1,5 +1,6 @@
 package com.bangumi.ywylite.ui.screen
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -11,11 +12,13 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.ui.component.openInBrowser
 import android.content.Context
@@ -55,6 +58,28 @@ fun SettingsScreen(
     // 字体大小（标签页豁免，不随缩放）
     val fontScale by app.settings.fontScale.collectAsState(initial = 1f)
     var showFontSizeDialog by remember { mutableStateOf(false) }
+
+    // 主界面背景图：图源 / 蒙版档位 / 透明度 / 自选图
+    val bgSource by app.settings.backgroundSource.collectAsState(initial = "none")
+    val bgMaskPreset by app.settings.backgroundMaskPreset.collectAsState(initial = "medium")
+    val bgMaskAlpha by app.settings.backgroundMaskAlpha.collectAsState(initial = 60)
+    val bgCustomUri by app.settings.backgroundCustomUri.collectAsState(initial = null)
+    var showBgSourceDialog by remember { mutableStateOf(false) }
+    var showBgMaskDialog by remember { mutableStateOf(false) }
+    // 自选图：取持久化 URI 权限，避免重启后无法读取
+    val pickCustomImage = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            scope.launch { app.settings.saveBackgroundCustomUri(uri.toString()) }
+        }
+    }
 
     // 官方 API / Web 端域名切换
     val apiHosts = listOf(
@@ -196,6 +221,88 @@ fun SettingsScreen(
         )
     }
 
+    if (showBgSourceDialog) {
+        AlertDialog(
+            onDismissRequest = { showBgSourceDialog = false },
+            title = { Text("背景图图源") },
+            text = {
+                Column {
+                    listOf(
+                        "none" to "无背景（纯色）",
+                        "calendar" to "每日放送封面",
+                        "explore" to "浏览页热门封面",
+                        "custom" to "自选图片"
+                    ).forEach { (value, label) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    // 选 custom 时若还没选过图，直接打开系统选图器
+                                    if (value == "custom" && bgCustomUri == null) {
+                                        pickCustomImage.launch(arrayOf("image/*"))
+                                    }
+                                    scope.launch { app.settings.saveBackgroundSource(value) }
+                                    showBgSourceDialog = false
+                                }
+                                .padding(vertical = 8.dp)
+                        ) {
+                            RadioButton(selected = bgSource == value, onClick = {
+                                if (value == "custom" && bgCustomUri == null) {
+                                    pickCustomImage.launch(arrayOf("image/*"))
+                                }
+                                scope.launch { app.settings.saveBackgroundSource(value) }
+                                showBgSourceDialog = false
+                            })
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(label)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showBgSourceDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showBgMaskDialog) {
+        AlertDialog(
+            onDismissRequest = { showBgMaskDialog = false },
+            title = { Text("背景蒙版") },
+            text = {
+                Column {
+                    listOf(
+                        "light" to "浅（背景更清晰）",
+                        "medium" to "中（平衡）",
+                        "dark" to "深（内容更易读）"
+                    ).forEach { (value, label) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch { app.settings.saveBackgroundMaskPreset(value) }
+                                    showBgMaskDialog = false
+                                }
+                                .padding(vertical = 8.dp)
+                        ) {
+                            RadioButton(selected = bgMaskPreset == value, onClick = {
+                                scope.launch { app.settings.saveBackgroundMaskPreset(value) }
+                                showBgMaskDialog = false
+                            })
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(label)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showBgMaskDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
     if (showDarkModeDialog) {
         AlertDialog(
             onDismissRequest = { showDarkModeDialog = false },
@@ -289,6 +396,7 @@ fun SettingsScreen(
     }
 
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text("设置") },
@@ -349,6 +457,57 @@ fun SettingsScreen(
                     subtitle = fontScaleOptions.firstOrNull { it.first == fontScale }?.second ?: "标准",
                     onClick = { showFontSizeDialog = true }
                 )
+                SettingsItem(
+                    icon = Icons.Default.Wallpaper,
+                    title = "背景图",
+                    subtitle = when (bgSource) {
+                        "calendar" -> "每日放送封面"
+                        "explore" -> "浏览页热门封面"
+                        "custom" -> if (bgCustomUri != null) "自选图片" else "未选择图片"
+                        else -> "无背景（纯色）"
+                    },
+                    onClick = { showBgSourceDialog = true }
+                )
+                // 背景图开启时才显示蒙版与透明度调节
+                if (bgSource != "none") {
+                    SettingsItem(
+                        icon = Icons.Default.Layers,
+                        title = "背景蒙版",
+                        subtitle = when (bgMaskPreset) {
+                            "light" -> "浅"
+                            "dark" -> "深"
+                            else -> "中"
+                        },
+                        onClick = { showBgMaskDialog = true }
+                    )
+                    // 自选图源时提供「更换图片」入口
+                    if (bgSource == "custom") {
+                        SettingsItem(
+                            icon = Icons.Default.Image,
+                            title = "更换背景图片",
+                            subtitle = if (bgCustomUri != null) "点击重新选择" else "未选择图片",
+                            onClick = { pickCustomImage.launch(arrayOf("image/*")) }
+                        )
+                    }
+                    // 透明度滑块：档位基础上微调
+                    ListItem(
+                        headlineContent = { Text("蒙版透明度") },
+                        supportingContent = {
+                            Column {
+                                Text("${bgMaskAlpha}%", style = MaterialTheme.typography.labelSmall)
+                                Slider(
+                                    value = bgMaskAlpha.toFloat(),
+                                    onValueChange = { v ->
+                                        scope.launch { app.settings.saveBackgroundMaskAlpha(v.toInt()) }
+                                    },
+                                    valueRange = 0f..100f,
+                                    steps = 0
+                                )
+                            }
+                        },
+                        leadingContent = { Icon(Icons.Default.Tune, contentDescription = null) }
+                    )
+                }
             }
 
             SettingsSection(title = "账号") {
@@ -407,13 +566,34 @@ private fun SettingsSection(
     title: String,
     content: @Composable () -> Unit
 ) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
-    )
-    content()
+    // 区块默认折叠：点标题行展开/收起，带连贯的纵向缩放动画
+    var expanded by remember { mutableStateOf(false) }
+    Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(top = 8.dp, bottom = 4.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
+        AnimatedVisibility(visible = expanded) {
+            // AnimatedVisibility 不自带纵向布局，多个 SettingsItem 必须用 Column 包裹，
+            // 否则会叠在同一位置只露出最后一个
+            Column { content() }
+        }
+    }
 }
 
 @Composable

@@ -1,11 +1,7 @@
 package com.bangumi.ywylite.ui.screen
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -15,6 +11,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -27,6 +24,8 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -212,52 +211,98 @@ fun TagsScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    // 点搜索：搜索框（含放大镜）从右侧滑入占据标题区，放大镜停在框内左端，
-                    // 框的右端（放大镜原来的位置）是关闭叉号
-                    AnimatedContent(
-                        targetState = uiState.searching,
-                        transitionSpec = {
-                            if (targetState) {
-                                (slideInHorizontally { it } + fadeIn()) togetherWith
-                                    (slideOutHorizontally { -it } + fadeOut())
-                            } else {
-                                (slideInHorizontally { -it } + fadeIn()) togetherWith
-                                    (slideOutHorizontally { it } + fadeOut())
-                            }
-                        },
-                        label = "tagSearchBar"
-                    ) { searching ->
-                        if (searching) {
-                            TextField(
-                                value = uiState.searchQuery,
-                                onValueChange = { uiState = uiState.copy(searchQuery = it) },
-                                placeholder = { Text("输入标签名过滤已加载的标签") },
-                                leadingIcon = {
-                                    Icon(Icons.Filled.Search, contentDescription = null)
-                                },
-                                trailingIcon = {
-                                    IconButton(onClick = {
+                    // 点搜索：放大镜图标从右端（原按钮位）被推到左端框内，
+                    // 圆角搜索框从右端向左生长、左缘始终贴着放大镜，叉号固定在框右端
+                    val p by animateFloatAsState(
+                        targetValue = if (uiState.searching) 1f else 0f,
+                        animationSpec = spring(dampingRatio = 0.85f, stiffness = 380f),
+                        label = "tagSearchOpen"
+                    )
+                    BoxWithConstraints(
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        val W = maxWidth
+                        // 搜索框：宽从 0 长到满宽，锚右端 → 左缘从右端推进到左端
+                        val boxW = W * p
+                        Surface(
+                            shape = RoundedCornerShape(24.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .fillMaxHeight()
+                                .width(boxW)
+                        ) {
+                            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                                Spacer(Modifier.width(48.dp)) // 给外面的放大镜留位
+                                // 用 BasicTextField 而非 TextField：后者最小高度 56dp，
+                                // 放进 48dp 的圆角 Surface（会裁剪子项）里会把文字上缘切掉
+                                BasicTextField(
+                                    value = uiState.searchQuery,
+                                    onValueChange = { uiState = uiState.copy(searchQuery = it) },
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    ),
+                                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                    decorationBox = { inner ->
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            contentAlignment = Alignment.CenterStart
+                                        ) {
+                                            if (uiState.searchQuery.isEmpty()) {
+                                                Text(
+                                                    text = "输入标签名过滤已加载的标签",
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            inner()
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .focusRequester(searchFocusRequester)
+                                )
+                                IconButton(
+                                    onClick = {
                                         focusManager.clearFocus()
                                         uiState = uiState.copy(searching = false, searchQuery = "")
-                                    }) {
-                                        Icon(Icons.Filled.Close, contentDescription = "关闭搜索")
                                     }
-                                },
-                                singleLine = true,
-                                shape = RoundedCornerShape(24.dp),
-                                colors = TextFieldDefaults.colors(
-                                    focusedIndicatorColor = Color.Transparent,
-                                    unfocusedIndicatorColor = Color.Transparent,
-                                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusRequester(searchFocusRequester)
-                            )
-                        } else {
-                            Text("标签")
+                                ) {
+                                    Icon(Icons.Filled.Close, contentDescription = "关闭搜索")
+                                }
+                            }
                         }
+                        // 放大镜（唯一一个）：左缘从右端按钮位插值到左端框内位
+                        val magLeft = (W - 60.dp) * (1f - p) + 8.dp * p
+                        Box(
+                            modifier = Modifier
+                                .offset(x = magLeft)
+                                .fillMaxHeight()
+                                .width(48.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            IconButton(onClick = {
+                                if (uiState.searching) {
+                                    searchFocusRequester.requestFocus()
+                                } else {
+                                    uiState = uiState.copy(searching = true)
+                                }
+                            }) {
+                                Icon(Icons.Filled.Search, contentDescription = "搜索标签")
+                            }
+                        }
+                        // 标题：随展开淡出左移
+                        Text(
+                            text = "标签",
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .padding(start = 16.dp)
+                                .graphicsLayer {
+                                    alpha = 1f - p
+                                    translationX = -(p * 40f)
+                                }
+                        )
                     }
                 },
                 navigationIcon = {
@@ -265,13 +310,7 @@ fun TagsScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
-                actions = {
-                    if (!uiState.searching) {
-                        IconButton(onClick = { uiState = uiState.copy(searching = true) }) {
-                            Icon(Icons.Filled.Search, contentDescription = "搜索标签")
-                        }
-                    }
-                }
+                actions = {}
             )
         }
     ) { padding ->

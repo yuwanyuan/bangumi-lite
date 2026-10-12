@@ -140,6 +140,7 @@ fun SearchScreen(
     }
 
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
             TopAppBar(
                 title = {
@@ -169,7 +170,7 @@ fun SearchScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = androidx.compose.ui.graphics.Color.Transparent
                 )
             )
         }
@@ -219,7 +220,9 @@ fun SearchScreen(
                         items(uiState.results, key = { it.id }) { subject ->
                             SubjectListItem(
                                 subject = subject,
-                                onClick = { onSubjectClick(subject.id) }
+                                onClick = { onSubjectClick(subject.id) },
+                                // 跨类型混排时标注条目类型，便于区分动画/书籍/游戏等
+                                typeLabel = searchScopes.firstOrNull { it.first == subject.type }?.second
                             )
                         }
                         if (uiState.hasMore) {

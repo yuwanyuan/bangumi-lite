@@ -84,7 +84,9 @@ fun SubjectCard(
 fun SubjectListItem(
     subject: SubjectSmall,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 条目类型标签（如「动画」「书籍」）；为 null 不显示。搜索结果用以区分混排的类型 */
+    typeLabel: String? = null
 ) {
     ListItem(
         headlineContent = {
@@ -99,6 +101,19 @@ fun SubjectListItem(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                if (typeLabel != null) {
+                    Surface(
+                        shape = MaterialTheme.shapes.extraSmall,
+                        color = MaterialTheme.colorScheme.secondaryContainer
+                    ) {
+                        Text(
+                            text = typeLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
+                }
                 if (subject.nameCn.isNotEmpty()) {
                     Text(
                         text = subject.name,
