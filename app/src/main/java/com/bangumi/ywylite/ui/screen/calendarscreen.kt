@@ -60,6 +60,7 @@ fun CalendarScreen(
     }
 
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text("每日放送") },
@@ -69,7 +70,7 @@ fun CalendarScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = androidx.compose.ui.graphics.Color.Transparent
                 )
             )
         }
@@ -108,7 +109,7 @@ private fun CalendarContent(
         ScrollableTabRow(
             edgePadding = 16.dp,
             selectedTabIndex = uiState.selectedDay,
-            containerColor = MaterialTheme.colorScheme.surface,
+            containerColor = androidx.compose.ui.graphics.Color.Transparent,
         ) {
             uiState.data.forEachIndexed { index, day ->
                 Tab(

@@ -31,6 +31,7 @@ fun CacheSettingsScreen(
     }
 
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text("缓存管理") },

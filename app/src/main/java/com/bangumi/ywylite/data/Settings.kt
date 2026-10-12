@@ -108,15 +108,6 @@ class Settings(private val context: Context) {
         prefs[FONT_SCALE_KEY] ?: 1f
     }
 
-    /**
-     * 主界面背景图图源：
-     * "none"=无背景（默认，纯色），"calendar"=每日放送封面拼图，
-     * "explore"=浏览页热门封面，"custom"=用户从相册选的固定图
-     */
-    val backgroundSource: Flow<String> = context.dataStore.data.map { prefs ->
-        prefs[BACKGROUND_SOURCE_KEY] ?: "none"
-    }
-
     /** 背景蒙版档位："light"/"medium"/"dark"，决定压在背景图上的半透明色层强度 */
     val backgroundMaskPreset: Flow<String> = context.dataStore.data.map { prefs ->
         prefs[BACKGROUND_MASK_PRESET_KEY] ?: "medium"
@@ -127,7 +118,7 @@ class Settings(private val context: Context) {
         prefs[BACKGROUND_MASK_ALPHA_KEY] ?: 60
     }
 
-    /** 用户自选背景图的本地 URI（图源为 custom 时生效） */
+    /** 用户自选背景图的本地 URI（null = 无背景图） */
     val backgroundCustomUri: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[BACKGROUND_CUSTOM_URI_KEY]
     }
@@ -243,12 +234,6 @@ class Settings(private val context: Context) {
         }
     }
 
-    suspend fun saveBackgroundSource(source: String) {
-        context.dataStore.edit { prefs ->
-            prefs[BACKGROUND_SOURCE_KEY] = source
-        }
-    }
-
     suspend fun saveBackgroundMaskPreset(preset: String) {
         context.dataStore.edit { prefs ->
             prefs[BACKGROUND_MASK_PRESET_KEY] = preset
@@ -286,7 +271,6 @@ class Settings(private val context: Context) {
     private val DEFAULT_TAB_KEY = stringPreferencesKey("default_tab")
     private val COLLECTION_WATERFALL_KEY = booleanPreferencesKey("collection_waterfall")
     private val FONT_SCALE_KEY = floatPreferencesKey("font_scale")
-    private val BACKGROUND_SOURCE_KEY = stringPreferencesKey("background_source")
     private val BACKGROUND_MASK_PRESET_KEY = stringPreferencesKey("background_mask_preset")
     private val BACKGROUND_MASK_ALPHA_KEY = intPreferencesKey("background_mask_alpha")
     private val BACKGROUND_CUSTOM_URI_KEY = stringPreferencesKey("background_custom_uri")

@@ -208,6 +208,7 @@ fun TagsScreen(
     }
 
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
             TopAppBar(
                 title = {
@@ -318,7 +319,7 @@ fun TagsScreen(
             ScrollableTabRow(
                 selectedTabIndex = tagsSubjectTypes.indexOfFirst { it.first == uiState.selectedType }.coerceAtLeast(0),
                 edgePadding = 16.dp,
-                containerColor = MaterialTheme.colorScheme.surface,
+                containerColor = androidx.compose.ui.graphics.Color.Transparent,
                 divider = {}
             ) {
                 tagsSubjectTypes.forEach { (type, label) ->

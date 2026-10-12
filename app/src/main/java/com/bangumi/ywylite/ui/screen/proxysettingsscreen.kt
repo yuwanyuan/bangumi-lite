@@ -54,6 +54,7 @@ fun ProxySettingsScreen(
     }
 
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text("代理设置") },

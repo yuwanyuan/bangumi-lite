@@ -34,6 +34,13 @@ private val fontScaleOptions = listOf(
     1.4f to "特大"
 )
 
+/** 背景蒙版档位：第三项即透明度百分比——选档位等于把滑块拨到该值，滑块调整时反查档位名 */
+private val bgMaskPresets = listOf(
+    Triple("light", "浅", 35),
+    Triple("medium", "中", 60),
+    Triple("dark", "深", 85)
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -59,12 +66,12 @@ fun SettingsScreen(
     val fontScale by app.settings.fontScale.collectAsState(initial = 1f)
     var showFontSizeDialog by remember { mutableStateOf(false) }
 
-    // 主界面背景图：图源 / 蒙版档位 / 透明度 / 自选图
-    val bgSource by app.settings.backgroundSource.collectAsState(initial = "none")
+    // 主界面背景图：用户自选图片 + 蒙版档位/透明度
     val bgMaskPreset by app.settings.backgroundMaskPreset.collectAsState(initial = "medium")
     val bgMaskAlpha by app.settings.backgroundMaskAlpha.collectAsState(initial = 60)
     val bgCustomUri by app.settings.backgroundCustomUri.collectAsState(initial = null)
-    var showBgSourceDialog by remember { mutableStateOf(false) }
+    var bgMaskAlphaDrag by remember { mutableStateOf<Float?>(null) }
+    var showBgImageDialog by remember { mutableStateOf(false) }
     var showBgMaskDialog by remember { mutableStateOf(false) }
     // 自选图：取持久化 URI 权限，避免重启后无法读取
     val pickCustomImage = rememberLauncherForActivityResult(
@@ -221,47 +228,44 @@ fun SettingsScreen(
         )
     }
 
-    if (showBgSourceDialog) {
+    if (showBgImageDialog) {
         AlertDialog(
-            onDismissRequest = { showBgSourceDialog = false },
-            title = { Text("背景图图源") },
+            onDismissRequest = { showBgImageDialog = false },
+            title = { Text("背景图") },
             text = {
                 Column {
-                    listOf(
-                        "none" to "无背景（纯色）",
-                        "calendar" to "每日放送封面",
-                        "explore" to "浏览页热门封面",
-                        "custom" to "自选图片"
-                    ).forEach { (value, label) ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    // 选 custom 时若还没选过图，直接打开系统选图器
-                                    if (value == "custom" && bgCustomUri == null) {
-                                        pickCustomImage.launch(arrayOf("image/*"))
-                                    }
-                                    scope.launch { app.settings.saveBackgroundSource(value) }
-                                    showBgSourceDialog = false
-                                }
-                                .padding(vertical = 8.dp)
-                        ) {
-                            RadioButton(selected = bgSource == value, onClick = {
-                                if (value == "custom" && bgCustomUri == null) {
-                                    pickCustomImage.launch(arrayOf("image/*"))
-                                }
-                                scope.launch { app.settings.saveBackgroundSource(value) }
-                                showBgSourceDialog = false
-                            })
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(label)
-                        }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                pickCustomImage.launch(arrayOf("image/*"))
+                                showBgImageDialog = false
+                            }
+                            .padding(vertical = 12.dp)
+                    ) {
+                        Icon(Icons.Default.Image, contentDescription = null)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("更换图片")
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                scope.launch { app.settings.saveBackgroundCustomUri(null) }
+                                showBgImageDialog = false
+                            }
+                            .padding(vertical = 12.dp)
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("移除背景图", color = MaterialTheme.colorScheme.error)
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showBgSourceDialog = false }) { Text("取消") }
+                TextButton(onClick = { showBgImageDialog = false }) { Text("取消") }
             }
         )
     }
@@ -272,27 +276,29 @@ fun SettingsScreen(
             title = { Text("背景蒙版") },
             text = {
                 Column {
-                    listOf(
-                        "light" to "浅（背景更清晰）",
-                        "medium" to "中（平衡）",
-                        "dark" to "深（内容更易读）"
-                    ).forEach { (value, label) ->
+                    bgMaskPresets.forEach { (value, short, alpha) ->
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    scope.launch { app.settings.saveBackgroundMaskPreset(value) }
+                                    scope.launch {
+                                        app.settings.saveBackgroundMaskPreset(value)
+                                        app.settings.saveBackgroundMaskAlpha(alpha)
+                                    }
                                     showBgMaskDialog = false
                                 }
                                 .padding(vertical = 8.dp)
                         ) {
-                            RadioButton(selected = bgMaskPreset == value, onClick = {
-                                scope.launch { app.settings.saveBackgroundMaskPreset(value) }
+                            RadioButton(selected = bgMaskAlpha == alpha, onClick = {
+                                scope.launch {
+                                    app.settings.saveBackgroundMaskPreset(value)
+                                    app.settings.saveBackgroundMaskAlpha(alpha)
+                                }
                                 showBgMaskDialog = false
                             })
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(label)
+                            Text("$short（蒙版 $alpha%）")
                         }
                     }
                 }
@@ -460,45 +466,41 @@ fun SettingsScreen(
                 SettingsItem(
                     icon = Icons.Default.Wallpaper,
                     title = "背景图",
-                    subtitle = when (bgSource) {
-                        "calendar" -> "每日放送封面"
-                        "explore" -> "浏览页热门封面"
-                        "custom" -> if (bgCustomUri != null) "自选图片" else "未选择图片"
-                        else -> "无背景（纯色）"
-                    },
-                    onClick = { showBgSourceDialog = true }
+                    subtitle = if (bgCustomUri != null) "已选择图片（点击更换或移除）" else "从相册选择一张图片",
+                    onClick = {
+                        if (bgCustomUri == null) {
+                            pickCustomImage.launch(arrayOf("image/*"))
+                        } else {
+                            showBgImageDialog = true
+                        }
+                    }
                 )
-                // 背景图开启时才显示蒙版与透明度调节
-                if (bgSource != "none") {
+                // 已设置背景图时才显示蒙版与透明度调节
+                if (bgCustomUri != null) {
                     SettingsItem(
                         icon = Icons.Default.Layers,
                         title = "背景蒙版",
-                        subtitle = when (bgMaskPreset) {
-                            "light" -> "浅"
-                            "dark" -> "深"
-                            else -> "中"
-                        },
+                        subtitle = "${bgMaskPresets.firstOrNull { it.first == bgMaskPreset }?.second ?: "自定义"}（${bgMaskAlpha}%）",
                         onClick = { showBgMaskDialog = true }
                     )
-                    // 自选图源时提供「更换图片」入口
-                    if (bgSource == "custom") {
-                        SettingsItem(
-                            icon = Icons.Default.Image,
-                            title = "更换背景图片",
-                            subtitle = if (bgCustomUri != null) "点击重新选择" else "未选择图片",
-                            onClick = { pickCustomImage.launch(arrayOf("image/*")) }
-                        )
-                    }
-                    // 透明度滑块：档位基础上微调
+                    // 透明度滑块：拖动中只改本地状态，松手才落盘并反查档位名
                     ListItem(
                         headlineContent = { Text("蒙版透明度") },
                         supportingContent = {
                             Column {
-                                Text("${bgMaskAlpha}%", style = MaterialTheme.typography.labelSmall)
+                                Text("${(bgMaskAlphaDrag ?: bgMaskAlpha.toFloat()).toInt()}%", style = MaterialTheme.typography.labelSmall)
                                 Slider(
-                                    value = bgMaskAlpha.toFloat(),
-                                    onValueChange = { v ->
-                                        scope.launch { app.settings.saveBackgroundMaskAlpha(v.toInt()) }
+                                    value = bgMaskAlphaDrag ?: bgMaskAlpha.toFloat(),
+                                    onValueChange = { bgMaskAlphaDrag = it },
+                                    onValueChangeFinished = {
+                                        val alpha = (bgMaskAlphaDrag ?: bgMaskAlpha.toFloat()).toInt()
+                                        bgMaskAlphaDrag = null
+                                        scope.launch {
+                                            app.settings.saveBackgroundMaskAlpha(alpha)
+                                            app.settings.saveBackgroundMaskPreset(
+                                                bgMaskPresets.firstOrNull { it.third == alpha }?.first ?: "custom"
+                                            )
+                                        }
                                     },
                                     valueRange = 0f..100f,
                                     steps = 0

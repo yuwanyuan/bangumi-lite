@@ -231,7 +231,7 @@ fun ExploreScreen(
             ScrollableTabRow(
                 edgePadding = 16.dp,
                 selectedTabIndex = subjectTypes.indexOfFirst { it.first == uiState.selectedType }.coerceAtLeast(0),
-                containerColor = MaterialTheme.colorScheme.surface,
+                containerColor = androidx.compose.ui.graphics.Color.Transparent,
                 modifier = Modifier.height(52.dp)
             ) {
                 subjectTypes.forEach { (type, label) ->

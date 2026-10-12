@@ -59,6 +59,7 @@ fun AccountSettingsScreen(
     }
 
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text("账号设置") },

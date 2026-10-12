@@ -1,5 +1,6 @@
 package com.bangumi.ywylite.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -68,9 +69,7 @@ private fun BangumiAppContent(baseDensity: Density) {
     val token by app.settings.accessToken.collectAsState(initial = null)
     val ready by app.appReady.collectAsState()
 
-    // 主界面背景图设置（除详情页外所有页面透出）
-    val bgSource by app.settings.backgroundSource.collectAsState(initial = "none")
-    val bgMaskPreset by app.settings.backgroundMaskPreset.collectAsState(initial = "medium")
+    // 主界面背景图设置（用户自选图；除详情页外所有页面透出）
     val bgMaskAlpha by app.settings.backgroundMaskAlpha.collectAsState(initial = 60)
     val bgCustomUri by app.settings.backgroundCustomUri.collectAsState(initial = null)
 
@@ -80,19 +79,28 @@ private fun BangumiAppContent(baseDensity: Density) {
 
     if (!ready) {
         // 配置恢复（token/域名/代理）完成前不渲染页面，避免带默认直连配置抢先发请求
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+            contentAlignment = Alignment.Center
+        ) {
             CircularProgressIndicator()
         }
         return
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        if (showAppBackground) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            // 基底主题色：各页 Scaffold 已改为透明以透出背景图，必须由这里兜底涂背景，
+            // 否则深色模式下会漏出 Activity 窗口的浅色底（深色模式失效）
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        if (showAppBackground && bgCustomUri != null) {
             AppBackground(
-                source = bgSource,
-                maskPreset = bgMaskPreset,
-                maskAlpha = bgMaskAlpha,
-                customUri = bgCustomUri
+                customUri = bgCustomUri,
+                maskAlpha = bgMaskAlpha
             )
         }
     Scaffold(

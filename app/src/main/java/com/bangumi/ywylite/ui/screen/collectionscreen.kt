@@ -270,7 +270,7 @@ fun CollectionScreen(
                 ScrollableTabRow(
                     edgePadding = 16.dp,
                     selectedTabIndex = collectionTypes.indexOfFirst { it.first == uiState.selectedType }.coerceAtLeast(0),
-                    containerColor = MaterialTheme.colorScheme.surface,
+                    containerColor = androidx.compose.ui.graphics.Color.Transparent,
                 ) {
                     collectionTypes.forEach { (type, label) ->
                         val color = collectionTypeColors[type]
