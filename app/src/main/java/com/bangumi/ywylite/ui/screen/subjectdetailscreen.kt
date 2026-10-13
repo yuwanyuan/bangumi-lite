@@ -295,6 +295,8 @@ fun SubjectDetailScreen(
         // 详情页永远走深色配色：背景是深色封面/黑色，正文若用浅色主题的深色文字会看不见。
         // 从当前配色 copy 出深色前景/底色，保留 primary/secondary 等强调色（粉或壁纸派生色），
         // 避免换成 Material 默认紫色导致星级/链接/标签变色。
+        // 详情正文直接铺在 Box 上（无 Surface），无色 Text 读的是 LocalContentColor——
+        // 内层 MaterialTheme 不会自动刷新它，必须显式提供白色。
         uiState.subject != null -> {
             val base = MaterialTheme.colorScheme
             androidx.compose.material3.MaterialTheme(
@@ -316,100 +318,104 @@ fun SubjectDetailScreen(
                     surfaceContainerHighest = Color(0xFF2E2E2E)
                 )
             ) {
-        SubjectDetailContent(
-            uiState = uiState,
-            onSyncCollection = { scope.launch { syncCollection() } },
-            onCollect = { type, comment, rate, tags ->
-                scope.launch {
-                    var failed: String? = null
-                    try {
-                        app.api.collectSubject(subjectId, type, rate = rate, comment = comment, tags = tags)
-                        if (type == 0) {
-                            uiState = uiState.copy(userCollection = null)
-                        } else {
-                            uiState = uiState.copy(
-                                userCollection = uiState.userCollection?.copy(
-                                    type = type,
-                                    tags = tags ?: uiState.userCollection?.tags ?: emptyList()
-                                )
-                                    ?: UserCollection(
-                                        subjectId = subjectId,
-                                        type = type,
-                                        rate = rate ?: 0,
-                                        comment = comment ?: "",
-                                        tags = tags ?: emptyList()
-                                    )
-                            )
-                            if (!username.isNullOrBlank()) {
-                                runCatching { app.api.getSubjectCollection(username!!, subjectId, token) }
-                                    .getOrNull()?.let { freshCollection ->
-                                        uiState = uiState.copy(userCollection = freshCollection)
+                androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.material3.LocalContentColor provides Color.White
+                ) {
+                    SubjectDetailContent(
+                        uiState = uiState,
+                        onSyncCollection = { scope.launch { syncCollection() } },
+                        onCollect = { type, comment, rate, tags ->
+                            scope.launch {
+                                var failed: String? = null
+                                try {
+                                    app.api.collectSubject(subjectId, type, rate = rate, comment = comment, tags = tags)
+                                    if (type == 0) {
+                                        uiState = uiState.copy(userCollection = null)
+                                    } else {
+                                        uiState = uiState.copy(
+                                            userCollection = uiState.userCollection?.copy(
+                                                type = type,
+                                                tags = tags ?: uiState.userCollection?.tags ?: emptyList()
+                                            )
+                                                ?: UserCollection(
+                                                    subjectId = subjectId,
+                                                    type = type,
+                                                    rate = rate ?: 0,
+                                                    comment = comment ?: "",
+                                                    tags = tags ?: emptyList()
+                                                )
+                                        )
+                                        if (!username.isNullOrBlank()) {
+                                            runCatching { app.api.getSubjectCollection(username!!, subjectId, token) }
+                                                .getOrNull()?.let { freshCollection ->
+                                                    uiState = uiState.copy(userCollection = freshCollection)
+                                                }
+                                        }
                                     }
+                                } catch (e: Exception) {
+                                    failed = e.message
+                                }
+                                failed?.let { snackbarHostState.showSnackbar("收藏失败：$it") }
                             }
-                        }
-                    } catch (e: Exception) {
-                        failed = e.message
-                    }
-                    failed?.let { snackbarHostState.showSnackbar("收藏失败：$it") }
+                        },
+                        onToggleWatched = { episodeId ->
+                            scope.launch {
+                                if (!ensureCanMark()) return@launch
+                                try {
+                                    val isWatched = episodeId in uiState.watchedEpisodes
+                                    if (isWatched) {
+                                        app.api.updateEpisodeStatus(episodeId, 0)
+                                        uiState = uiState.copy(watchedEpisodes = uiState.watchedEpisodes - episodeId)
+                                    } else {
+                                        app.api.updateEpisodeStatus(episodeId, 2)
+                                        uiState = uiState.copy(watchedEpisodes = uiState.watchedEpisodes + episodeId)
+                                    }
+                                } catch (_: Exception) {
+                                    snackbarHostState.showSnackbar("标记失败，请重试")
+                                }
+                            }
+                        },
+                        onMarkWatchedUpTo = { episode ->
+                            scope.launch {
+                                if (!ensureCanMark()) return@launch
+                                // legacy 接口按正篇序号记进度；多季度番 sort 可能不从 1 开始，取正篇内的位次
+                                val mainEps = uiState.episodes.filter { it.type == 0 }.sortedBy { it.sort }
+                                val index = mainEps.indexOfFirst { it.id == episode.id }
+                                val targetSort = if (index >= 0) index + 1 else episode.sort.toInt()
+                                var ok = runCatching { app.api.markWatchedUpTo(subjectId, targetSort) }.isSuccess
+                                if (!ok) {
+                                    // legacy 失败退化为逐集标记（SP 等非正篇集不在 mainEps 内，单独标记该集）。
+                                    // 统计实际成功数：原先无论成败都提示"已标记"，失败被当成成功
+                                    val fallbackEps = if (index >= 0) mainEps.take(index + 1) else listOf(episode)
+                                    val marked = fallbackEps.count { ep ->
+                                        runCatching { app.api.updateEpisodeStatus(ep.id, 2) }.isSuccess
+                                    }
+                                    ok = fallbackEps.isNotEmpty() && marked == fallbackEps.size
+                                }
+                                runCatching { app.api.getAllEpisodeCollections(subjectId) }.getOrNull()?.let { list ->
+                                    uiState = uiState.copy(
+                                        watchedEpisodes = list.filter { it.type == 2 }.mapNotNull { it.episode?.id }.toSet()
+                                    )
+                                }
+                                if (ok) {
+                                    snackbarHostState.showSnackbar("已标记看到第 ${targetSort} 话")
+                                } else {
+                                    snackbarHostState.showSnackbar("标记失败，请重试")
+                                }
+                            }
+                        },
+                        getEpisodeComments = { episodeId ->
+                            app.api.getEpisodeComments(episodeId)
+                        },
+                        snackbarHostState = snackbarHostState,
+                        getComments = { sid, offset, limit ->
+                            app.api.getComments(sid, offset = offset, limit = limit)
+                        },
+                        onTagClick = onTagClick,
+                        onSubjectClick = onSubjectClick,
+                        onBack = onBack
+                    )
                 }
-            },
-            onToggleWatched = { episodeId ->
-                scope.launch {
-                    if (!ensureCanMark()) return@launch
-                    try {
-                        val isWatched = episodeId in uiState.watchedEpisodes
-                        if (isWatched) {
-                            app.api.updateEpisodeStatus(episodeId, 0)
-                            uiState = uiState.copy(watchedEpisodes = uiState.watchedEpisodes - episodeId)
-                        } else {
-                            app.api.updateEpisodeStatus(episodeId, 2)
-                            uiState = uiState.copy(watchedEpisodes = uiState.watchedEpisodes + episodeId)
-                        }
-                    } catch (_: Exception) {
-                        snackbarHostState.showSnackbar("标记失败，请重试")
-                    }
-                }
-            },
-            onMarkWatchedUpTo = { episode ->
-                scope.launch {
-                    if (!ensureCanMark()) return@launch
-                    // legacy 接口按正篇序号记进度；多季度番 sort 可能不从 1 开始，取正篇内的位次
-                    val mainEps = uiState.episodes.filter { it.type == 0 }.sortedBy { it.sort }
-                    val index = mainEps.indexOfFirst { it.id == episode.id }
-                    val targetSort = if (index >= 0) index + 1 else episode.sort.toInt()
-                    var ok = runCatching { app.api.markWatchedUpTo(subjectId, targetSort) }.isSuccess
-                    if (!ok) {
-                        // legacy 失败退化为逐集标记（SP 等非正篇集不在 mainEps 内，单独标记该集）。
-                        // 统计实际成功数：原先无论成败都提示"已标记"，失败被当成成功
-                        val fallbackEps = if (index >= 0) mainEps.take(index + 1) else listOf(episode)
-                        val marked = fallbackEps.count { ep ->
-                            runCatching { app.api.updateEpisodeStatus(ep.id, 2) }.isSuccess
-                        }
-                        ok = fallbackEps.isNotEmpty() && marked == fallbackEps.size
-                    }
-                    runCatching { app.api.getAllEpisodeCollections(subjectId) }.getOrNull()?.let { list ->
-                        uiState = uiState.copy(
-                            watchedEpisodes = list.filter { it.type == 2 }.mapNotNull { it.episode?.id }.toSet()
-                        )
-                    }
-                    if (ok) {
-                        snackbarHostState.showSnackbar("已标记看到第 ${targetSort} 话")
-                    } else {
-                        snackbarHostState.showSnackbar("标记失败，请重试")
-                    }
-                }
-            },
-            getEpisodeComments = { episodeId ->
-                app.api.getEpisodeComments(episodeId)
-            },
-            snackbarHostState = snackbarHostState,
-            getComments = { sid, offset, limit ->
-                app.api.getComments(sid, offset = offset, limit = limit)
-            },
-            onTagClick = onTagClick,
-            onSubjectClick = onSubjectClick,
-            onBack = onBack
-        )
             }
         }
         else -> EmptyView()

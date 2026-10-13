@@ -4,6 +4,7 @@ import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -130,6 +131,14 @@ fun BangumiTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        content = content
+        // 无色 Text 用 LocalContentColor 而非 colorScheme.onSurface；M3 的 MaterialTheme
+        // 不提供它（由 Surface 提供），普通 Box/Column 里的 Text 会回落到默认黑色——
+        // 深色模式下出现「黑底黑字」。这里全局对齐到 onBackground，普通文字随主题变色。
+        content = {
+            CompositionLocalProvider(
+                androidx.compose.material3.LocalContentColor provides colorScheme.onBackground,
+                content = content
+            )
+        }
     )
 }

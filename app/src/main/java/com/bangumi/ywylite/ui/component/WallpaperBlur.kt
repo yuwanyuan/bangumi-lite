@@ -60,7 +60,12 @@ fun wallpaperGlass(darkTheme: Boolean): Modifier {
     val tintColor = if (darkTheme) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.6f)
     return Modifier.hazeChild(scope.hazeState) {
         blurRadius = radius
+        // Haze 1.x 要求必须给 backgroundColor（不透明底），否则绘制时直接
+        // IllegalArgumentException: "backgroundColor not specified"
+        backgroundColor = if (darkTheme) Color.Black else Color.White
         tints = listOf(HazeTint(tintColor))
+        // API < 31 无 RenderEffect 时走纯遮罩降级
+        fallbackTint = HazeTint(tintColor)
     }
 }
 

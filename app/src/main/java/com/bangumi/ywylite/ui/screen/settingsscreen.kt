@@ -17,7 +17,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.activity.compose.rememberLauncherForActivityResult
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.ui.component.openInBrowser
@@ -547,9 +549,12 @@ private fun SettingsSection(
         ) {
             Text(
                 text = title,
-                // 标题字号比展开后的菜单项略小一档：titleMedium 是 16sp，菜单项用 titleLarge 18sp，
-                // 满足「菜单放大一点、比折叠打开的那个字小一点」
-                style = MaterialTheme.typography.titleMedium,
+                // 一级（折叠区块标题）文字放大一点点：16sp → 17sp，加粗加强层级；
+                // 展开后的菜单项保持默认字号（bodyLarge 16sp），比标题小一档
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.weight(1f)
             )
@@ -579,13 +584,8 @@ private fun SettingsItem(
     onClick: () -> Unit
 ) {
     ListItem(
-        headlineContent = {
-            Text(
-                title,
-                // 菜单项标题放大到 titleLarge（18sp），比区块标题 titleMedium（16sp）大一档
-                style = MaterialTheme.typography.titleLarge
-            )
-        },
+        // 展开后的菜单项保持默认字号（bodyLarge 16sp），不随一级标题放大
+        headlineContent = { Text(title) },
         supportingContent = { Text(subtitle) },
         leadingContent = {
             Icon(icon, contentDescription = null)
