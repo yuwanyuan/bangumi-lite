@@ -31,7 +31,9 @@ import com.bangumi.ywylite.App
 import com.bangumi.ywylite.ui.component.AppBackground
 import com.bangumi.ywylite.ui.component.LocalWallpaperBlur
 import com.bangumi.ywylite.ui.component.WallpaperBlurScope
-import com.bangumi.ywylite.ui.component.wallpaperScrim
+import com.bangumi.ywylite.ui.component.wallpaperGlass
+import com.bangumi.ywylite.ui.component.hazeWallpaperSource
+import com.bangumi.ywylite.ui.component.rememberWallpaperHazeState
 import com.bangumi.ywylite.ui.navigation.Route
 import com.bangumi.ywylite.ui.screen.*
 
@@ -80,10 +82,13 @@ private fun BangumiAppContent(baseDensity: Density) {
     val showBottomBar = bottomNavItems.any { it.route == currentDestination?.route }
     // 详情页自带封面背景，不透出主界面背景图
     val showAppBackground = currentDestination?.route != Route.SubjectDetail.path
+    // Haze 共享状态：AppBackground 标为 source，底栏/设置类页面标为 child
+    val hazeState = rememberWallpaperHazeState()
     // 壁纸模糊上下文：有壁纸且非详情页时启用，底栏与控件页面据此叠加毛玻璃
     val wallpaperBlur = WallpaperBlurScope(
         blurAmount = bgBlurAmount,
-        hasWallpaper = bgCustomUri != null && showAppBackground
+        hasWallpaper = bgCustomUri != null && showAppBackground,
+        hazeState = hazeState
     )
 
     if (!ready) {
@@ -109,7 +114,8 @@ private fun BangumiAppContent(baseDensity: Density) {
         if (showAppBackground && bgCustomUri != null) {
             AppBackground(
                 customUri = bgCustomUri,
-                maskAlpha = bgMaskAlpha
+                maskAlpha = bgMaskAlpha,
+                modifier = Modifier.hazeWallpaperSource(wallpaperBlur)
             )
         }
     CompositionLocalProvider(LocalWallpaperBlur provides wallpaperBlur) {
@@ -117,11 +123,11 @@ private fun BangumiAppContent(baseDensity: Density) {
         containerColor = Color.Transparent,
         bottomBar = {
             if (showBottomBar) {
-                // 有壁纸时底栏叠加毛玻璃 + 半透明遮罩；无壁纸时退化为普通 NavigationBar
+                // 有壁纸时底栏采样背后壁纸做毛玻璃；无壁纸时走默认 NavigationBar
                 val darkTheme = androidx.compose.foundation.isSystemInDarkTheme()
                 NavigationBar(
                     containerColor = if (wallpaperBlur.hasWallpaper) Color.Transparent else NavigationBarDefaults.containerColor,
-                    modifier = if (wallpaperBlur.hasWallpaper) Modifier.then(wallpaperScrim(darkTheme)) else Modifier
+                    modifier = Modifier.then(wallpaperGlass(darkTheme))
                 ) {
                     bottomNavItems.forEach { item ->
                         NavigationBarItem(

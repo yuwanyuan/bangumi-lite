@@ -34,8 +34,6 @@ import com.bangumi.ywylite.ui.component.EmptyView
 import com.bangumi.ywylite.ui.component.ImageUrls
 import com.bangumi.ywylite.ui.component.LoadingView
 import com.bangumi.ywylite.ui.component.openInBrowser
-import com.bangumi.ywylite.ui.component.wallpaperScrim
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.platform.LocalContext
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CancellationException
@@ -152,7 +150,7 @@ fun ProfileScreen(
     ) { padding ->
         if (!uiState.isLoggedIn) {
             LoginContent(
-                modifier = Modifier.padding(padding).fillMaxSize().then(wallpaperScrim(isSystemInDarkTheme())),
+                modifier = Modifier.padding(padding).fillMaxSize(),
                 onLoginSuccess = { user ->
                     uiState = uiState.copy(isLoggedIn = true, user = user, loading = false)
                 }
@@ -162,7 +160,6 @@ fun ProfileScreen(
                 modifier = Modifier
                     .padding(padding)
                     .fillMaxSize()
-                    .then(wallpaperScrim(isSystemInDarkTheme()))
             ) {
                 val user = uiState.user
                 if (user != null) {

@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.activity.compose.rememberLauncherForActivityResult
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.ui.component.openInBrowser
-import com.bangumi.ywylite.ui.component.wallpaperScrim
+import com.bangumi.ywylite.ui.component.wallpaperGlass
 import androidx.compose.foundation.isSystemInDarkTheme
 import android.content.Context
 import androidx.compose.ui.platform.LocalContext
@@ -375,7 +375,7 @@ fun SettingsScreen(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
-                .then(wallpaperScrim(isSystemInDarkTheme()))
+                .then(wallpaperGlass(isSystemInDarkTheme()))
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)

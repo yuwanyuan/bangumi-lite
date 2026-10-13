@@ -88,6 +88,10 @@ dependencies {
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
+    // Haze：毛玻璃效果（hazeSource 标记背景层，hazeChild 在前景控件采样模糊）
+    // 用 1.5.3：对齐本项目 Compose 1.7.x / AGP 8.7.3；更高版本要求 compileSdk 37 或 AGP 8.9+
+    implementation("dev.chrisbanes.haze:haze:1.5.3")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.compose.ui:ui-tooling-preview")
 }

@@ -292,7 +292,31 @@ fun SubjectDetailScreen(
                 modifier = Modifier.padding(padding)
             )
         }
-        uiState.subject != null -> SubjectDetailContent(
+        // 详情页永远走深色配色：背景是深色封面/黑色，正文若用浅色主题的深色文字会看不见。
+        // 从当前配色 copy 出深色前景/底色，保留 primary/secondary 等强调色（粉或壁纸派生色），
+        // 避免换成 Material 默认紫色导致星级/链接/标签变色。
+        uiState.subject != null -> {
+            val base = MaterialTheme.colorScheme
+            androidx.compose.material3.MaterialTheme(
+                colorScheme = base.copy(
+                    background = Color.Black,
+                    onBackground = Color.White,
+                    surface = Color(0xFF121212),
+                    onSurface = Color.White,
+                    surfaceVariant = Color(0xFF2A2A2A),
+                    onSurfaceVariant = Color(0xFFCFCFCF),
+                    outline = Color(0xFF8A8A8A),
+                    outlineVariant = Color(0xFF3C3C3C),
+                    inverseSurface = Color.White,
+                    inverseOnSurface = Color.Black,
+                    surfaceContainerLowest = Color(0xFF0D0D0D),
+                    surfaceContainerLow = Color(0xFF161616),
+                    surfaceContainer = Color(0xFF1C1C1C),
+                    surfaceContainerHigh = Color(0xFF242424),
+                    surfaceContainerHighest = Color(0xFF2E2E2E)
+                )
+            ) {
+        SubjectDetailContent(
             uiState = uiState,
             onSyncCollection = { scope.launch { syncCollection() } },
             onCollect = { type, comment, rate, tags ->
@@ -386,6 +410,8 @@ fun SubjectDetailScreen(
             onSubjectClick = onSubjectClick,
             onBack = onBack
         )
+            }
+        }
         else -> EmptyView()
     }
 }
@@ -436,6 +462,7 @@ private fun SubjectDetailContent(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .background(Color.Black)
             .onSizeChanged { overlaySize = it }
     ) {
         AsyncImage(
@@ -453,8 +480,8 @@ private fun SubjectDetailContent(
                     Brush.verticalGradient(
                         colors = listOf(
                             Color.Transparent,
-                            MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
-                            MaterialTheme.colorScheme.background.copy(alpha = 0.90f)
+                            Color.Black.copy(alpha = 0.55f),
+                            Color.Black.copy(alpha = 0.90f)
                         )
                     )
                 )

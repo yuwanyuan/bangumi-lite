@@ -15,7 +15,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.Settings
-import com.bangumi.ywylite.ui.component.wallpaperScrim
+import com.bangumi.ywylite.ui.component.wallpaperGlass
 import androidx.compose.foundation.isSystemInDarkTheme
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
@@ -72,7 +72,7 @@ fun ProxySettingsScreen(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
-                .then(wallpaperScrim(isSystemInDarkTheme()))
+                .then(wallpaperGlass(isSystemInDarkTheme()))
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)

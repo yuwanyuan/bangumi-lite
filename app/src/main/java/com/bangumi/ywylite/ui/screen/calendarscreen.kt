@@ -16,8 +16,6 @@ import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.CalendarDay
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
-import com.bangumi.ywylite.ui.component.wallpaperScrim
-import androidx.compose.foundation.isSystemInDarkTheme
 import kotlinx.coroutines.CancellationException
 
 data class CalendarUiState(
@@ -77,7 +75,7 @@ fun CalendarScreen(
             )
         }
     ) { padding ->
-        Box(modifier = Modifier.padding(padding).fillMaxSize().then(wallpaperScrim(isSystemInDarkTheme()))) {
+        Box(modifier = Modifier.padding(padding).fillMaxSize()) {
         when {
             uiState.loading -> LoadingView(Modifier.fillMaxSize())
             uiState.error != null -> ErrorView(

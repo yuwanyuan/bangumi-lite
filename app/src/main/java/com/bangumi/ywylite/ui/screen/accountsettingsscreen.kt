@@ -12,7 +12,7 @@ import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.Settings
 import com.bangumi.ywylite.ui.component.BangumiLoginPanel
-import com.bangumi.ywylite.ui.component.wallpaperScrim
+import com.bangumi.ywylite.ui.component.wallpaperGlass
 import androidx.compose.foundation.isSystemInDarkTheme
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CancellationException
@@ -77,7 +77,7 @@ fun AccountSettingsScreen(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
-                .then(wallpaperScrim(isSystemInDarkTheme()))
+                .then(wallpaperGlass(isSystemInDarkTheme()))
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
