@@ -88,11 +88,6 @@ class Settings(private val context: Context) {
         prefs[DARK_MODE_KEY] ?: "system"
     }
 
-    /** Android 12+ 动态取色开关（默认关闭，走品牌主题） */
-    val dynamicColor: Flow<Boolean> = context.dataStore.data.map { prefs ->
-        prefs[DYNAMIC_COLOR_KEY] ?: false
-    }
-
     /** 启动时底栏默认打开的页面："explore"=浏览，"collection"=收藏（默认收藏，维持历史行为） */
     val defaultTab: Flow<String> = context.dataStore.data.map { prefs ->
         prefs[DEFAULT_TAB_KEY] ?: "collection"
@@ -210,12 +205,6 @@ class Settings(private val context: Context) {
         }
     }
 
-    suspend fun saveDynamicColor(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
-            prefs[DYNAMIC_COLOR_KEY] = enabled
-        }
-    }
-
     suspend fun saveDefaultTab(tab: String) {
         context.dataStore.edit { prefs ->
             prefs[DEFAULT_TAB_KEY] = tab
@@ -267,7 +256,6 @@ class Settings(private val context: Context) {
     private val REFRESH_TOKEN_KEY = stringPreferencesKey("refresh_token")
     private val TOKEN_EXPIRES_AT_KEY = longPreferencesKey("token_expires_at")
     private val DARK_MODE_KEY = stringPreferencesKey("dark_mode")
-        private val DYNAMIC_COLOR_KEY = booleanPreferencesKey("dynamic_color")
     private val DEFAULT_TAB_KEY = stringPreferencesKey("default_tab")
     private val COLLECTION_WATERFALL_KEY = booleanPreferencesKey("collection_waterfall")
     private val FONT_SCALE_KEY = floatPreferencesKey("font_scale")

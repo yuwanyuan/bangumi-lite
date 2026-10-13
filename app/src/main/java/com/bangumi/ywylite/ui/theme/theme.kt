@@ -1,14 +1,12 @@
 package com.bangumi.ywylite.ui.theme
 
 import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.graphics.ColorUtils
 import androidx.core.view.WindowCompat
@@ -99,25 +97,23 @@ private fun darkSchemeFromSeed(seed: Color): ColorScheme {
 }
 
 /**
- * @param wallpaperSeed 用户自选背景图提取的种子色；非空时整套配色由它派生
- *   （界面与文字颜色跟随壁纸，保证前景清晰），为空则维持原有品牌粉/动态取色
+ * 配色只由应用内壁纸驱动：设了壁纸就用它提取的种子色派生整套配色，
+ * 没设壁纸就固定走品牌粉/品牌深色主题。
+ *
+ * 不用系统的 dynamicLightColorScheme/dynamicDarkColorScheme：它们跟随「系统壁纸」
+ * 取色，前景色可能与实际呈现的底色不同步（例如系统壁纸很深、浅色模式下却给出
+ * 偏浅的 onSurface），出现文字看不见的问题。应用内壁纸的种子色是我们自己从
+ * 用户选的图里统计出来的，底色与前景色始终成对生成，不会失配。
  */
 @Composable
 fun BangumiTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = false,
     wallpaperSeed: Color? = null,
     content: @Composable () -> Unit
 ) {
-    // 配色优先级：壁纸取色 > 系统动态取色（设置里显式开启） > 品牌粉主题
     val colorScheme = when {
         wallpaperSeed != null -> {
             if (darkTheme) darkSchemeFromSeed(wallpaperSeed) else lightSchemeFromSeed(wallpaperSeed)
-        }
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context)
-            else dynamicLightColorScheme(context)
         }
         darkTheme -> DarkColors
         else -> LightColors

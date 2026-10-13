@@ -26,7 +26,6 @@ class MainActivity : ComponentActivity() {
             val app = App.INSTANCE
             val context = LocalContext.current
             val darkMode by app.settings.darkMode.collectAsState(initial = "system")
-            val dynamicColor by app.settings.dynamicColor.collectAsState(initial = false)
             val wallpaperUri by app.settings.backgroundCustomUri.collectAsState(initial = null)
             val darkTheme = when (darkMode) {
                 "light" -> false
@@ -45,7 +44,6 @@ class MainActivity : ComponentActivity() {
 
             BangumiTheme(
                 darkTheme = darkTheme,
-                dynamicColor = dynamicColor,
                 wallpaperSeed = wallpaperSeed
             ) {
                 BangumiApp()
