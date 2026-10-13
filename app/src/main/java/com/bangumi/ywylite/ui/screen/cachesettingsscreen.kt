@@ -12,8 +12,6 @@ import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.data.CacheCleanResult
 import com.bangumi.ywylite.data.CacheInfo
 import com.bangumi.ywylite.data.CacheManager
-import com.bangumi.ywylite.ui.component.wallpaperGlass
-import androidx.compose.foundation.isSystemInDarkTheme
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -41,7 +39,10 @@ fun CacheSettingsScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
-                }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = androidx.compose.ui.graphics.Color.Transparent
+                )
             )
         }
     ) { padding ->
@@ -49,7 +50,7 @@ fun CacheSettingsScreen(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
-                .then(wallpaperGlass(isSystemInDarkTheme()))
+                
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)

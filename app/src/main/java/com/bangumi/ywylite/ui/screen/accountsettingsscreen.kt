@@ -12,8 +12,6 @@ import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.Settings
 import com.bangumi.ywylite.ui.component.BangumiLoginPanel
-import com.bangumi.ywylite.ui.component.wallpaperGlass
-import androidx.compose.foundation.isSystemInDarkTheme
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -69,7 +67,10 @@ fun AccountSettingsScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
-                }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = androidx.compose.ui.graphics.Color.Transparent
+                )
             )
         }
     ) { padding ->
@@ -77,7 +78,7 @@ fun AccountSettingsScreen(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
-                .then(wallpaperGlass(isSystemInDarkTheme()))
+                
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)

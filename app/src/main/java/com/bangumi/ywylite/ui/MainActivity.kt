@@ -34,17 +34,21 @@ class MainActivity : ComponentActivity() {
             }
 
             // 壁纸取色：有背景图时按它派生整套配色，界面与文字随壁纸变化保持清晰；
-            // 没有背景图则保持原样（品牌粉 / 系统动态取色）
+            // 没有背景图则保持原样（品牌粉）
             var wallpaperSeed by remember { mutableStateOf<Color?>(null) }
+            var wallpaperLuminance by remember { mutableStateOf<Float?>(null) }
             LaunchedEffect(wallpaperUri) {
-                wallpaperSeed = wallpaperUri
+                val palette = wallpaperUri
                     ?.let { runCatching { Uri.parse(it) }.getOrNull() }
-                    ?.let { extractWallpaperPalette(context, it)?.seed }
+                    ?.let { extractWallpaperPalette(context, it) }
+                wallpaperSeed = palette?.seed
+                wallpaperLuminance = palette?.luminance
             }
 
             BangumiTheme(
                 darkTheme = darkTheme,
-                wallpaperSeed = wallpaperSeed
+                wallpaperSeed = wallpaperSeed,
+                wallpaperLuminance = wallpaperLuminance
             ) {
                 BangumiApp()
             }

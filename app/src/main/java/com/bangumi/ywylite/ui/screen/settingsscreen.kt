@@ -23,8 +23,9 @@ import androidx.compose.ui.unit.sp
 import androidx.activity.compose.rememberLauncherForActivityResult
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.ui.component.openInBrowser
-import com.bangumi.ywylite.ui.component.wallpaperGlass
+import com.bangumi.ywylite.ui.component.wallpaperGlassPanel
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import android.content.Context
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
@@ -36,9 +37,6 @@ private val fontScaleOptions = listOf(
     1.2f to "大",
     1.4f to "特大"
 )
-
-/** 背景蒙版/模糊三级档位：滑块 steps=2 等价于 0/50/100 三档，这里给出档位名供显示 */
-private val bgLevelLabels = listOf("低", "中", "高")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -369,15 +367,18 @@ fun SettingsScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
-                }
+                },
+                // 透明标题栏：让壁纸从顶部也透出来，整屏像一个平面
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         }
     ) { padding ->
+        // 背景与其它页一致（透出 AppBackground 壁纸+蒙版，不额外整页加玻璃），
+        // 只有展开的选项块套玻璃面板
         Column(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
-                .then(wallpaperGlass(isSystemInDarkTheme()))
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -426,18 +427,15 @@ fun SettingsScreen(
                         }
                     }
                 )
-                // 已设置背景图时才显示蒙版透明度与模糊度（各为三级档位）
+                // 已设置背景图时才显示蒙版透明度与模糊度
                 if (bgCustomUri != null) {
-                    // 透明度三级档位：steps=2 把 0–100 分成 0/50/100 三档
+                    // 透明度：连续滑动（0–100，无档位）
                     ListItem(
                         headlineContent = { Text("蒙版透明度") },
                         supportingContent = {
                             Column {
                                 val v = (bgMaskAlphaDrag ?: bgMaskAlpha.toFloat()).toInt()
-                                Text(
-                                    "${bgLevelLabels.getOrElse((v / 50).coerceIn(0, 2)) { bgLevelLabels[1] }}（$v%）",
-                                    style = MaterialTheme.typography.labelSmall
-                                )
+                                Text("$v%", style = MaterialTheme.typography.labelSmall)
                                 Slider(
                                     value = bgMaskAlphaDrag ?: bgMaskAlpha.toFloat(),
                                     onValueChange = { bgMaskAlphaDrag = it },
@@ -447,22 +445,19 @@ fun SettingsScreen(
                                         scope.launch { app.settings.saveBackgroundMaskAlpha(alpha) }
                                     },
                                     valueRange = 0f..100f,
-                                    steps = 2
+                                    steps = 0
                                 )
                             }
                         },
                         leadingContent = { Icon(Icons.Default.Layers, contentDescription = null) }
                     )
-                    // 模糊度三级档位：控制底栏/控件页面的高斯模糊强度
+                    // 模糊度：连续滑动，控制底栏/设置页玻璃强度
                     ListItem(
                         headlineContent = { Text("背景模糊度") },
                         supportingContent = {
                             Column {
                                 val v = (bgBlurDrag ?: bgBlurAmount.toFloat()).toInt()
-                                Text(
-                                    "${bgLevelLabels.getOrElse((v / 50).coerceIn(0, 2)) { bgLevelLabels[1] }}（$v%）",
-                                    style = MaterialTheme.typography.labelSmall
-                                )
+                                Text("$v%", style = MaterialTheme.typography.labelSmall)
                                 Slider(
                                     value = bgBlurDrag ?: bgBlurAmount.toFloat(),
                                     onValueChange = { bgBlurDrag = it },
@@ -472,7 +467,7 @@ fun SettingsScreen(
                                         scope.launch { app.settings.saveBackgroundBlurAmount(blur) }
                                     },
                                     valueRange = 0f..100f,
-                                    steps = 2
+                                    steps = 0
                                 )
                             }
                         },
@@ -564,13 +559,19 @@ private fun SettingsSection(
                 tint = MaterialTheme.colorScheme.primary
             )
         }
-        // 标题行与展开内容之间用分割线分隔
+        // 展开的选项块：套一层更强的玻璃面板（圆角 + 半透明 + 强模糊），
+        // 与选项外的壁纸区域明显区分，形成「浮起的一块」
         AnimatedVisibility(visible = expanded) {
-            Column {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp)
+                    .then(wallpaperGlassPanel(isSystemInDarkTheme()))
+                    .padding(vertical = 4.dp)
+            ) {
                 // AnimatedVisibility 不自带纵向布局，多个 SettingsItem 必须用 Column 包裹，
                 // 否则会叠在同一位置只露出最后一个
-                content()
+                Column { content() }
             }
         }
     }

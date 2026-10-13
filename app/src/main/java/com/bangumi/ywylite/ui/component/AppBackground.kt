@@ -18,9 +18,9 @@ import coil.request.ImageRequest
  * 主界面背景图：用户从相册自选的固定图片（URI 持久化），上压蒙版遮罩。
  * 作用范围由调用方控制（BangumiApp 在除详情外的页面外层挂载）。
  *
- * 蒙版：[maskAlpha] 为百分比（档位预设即写入该值，滑块可再微调）。遮罩色用中性的
- * 白/黑而非壁纸派生色——后者会随壁纸色相偏移，把整屏染成同一色系且压不住花纹，
- * 前景文字对比度不可控。中性遮罩下浅色主题提亮、深色主题压暗，任何壁纸上都保证可读。
+ * 蒙版：[maskAlpha] 为百分比（滑块 0–100 连续可调）。遮罩色用中性的白/黑而非壁纸派生色，
+ * 前景文字对比度可控。为了「整屏融合成一个平面」的效果，蒙版上限压得比原先低
+ * （最高 0.6），让图片的深色区域也能透出来，而不是被糊成一片灰。
  */
 @Composable
 fun AppBackground(
@@ -33,7 +33,8 @@ fun AppBackground(
     val context = LocalContext.current
     val darkTheme = isSystemInDarkTheme()
     val maskColor = if (darkTheme) Color.Black else Color.White
-    val finalAlpha = (maskAlpha / 100f).coerceIn(0f, 0.97f)
+    // 上限 0.6：过高会把整张图（尤其深色区）压成死板的灰面，失去「平面融合」感
+    val finalAlpha = (maskAlpha / 100f * 0.6f).coerceIn(0f, 0.6f)
 
     Box(modifier = modifier.fillMaxSize()) {
         AsyncImage(
