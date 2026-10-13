@@ -33,6 +33,10 @@ import com.bangumi.ywylite.ui.component.BangumiLoginPanel
 import com.bangumi.ywylite.ui.component.EmptyView
 import com.bangumi.ywylite.ui.component.ImageUrls
 import com.bangumi.ywylite.ui.component.LoadingView
+import com.bangumi.ywylite.ui.component.openInBrowser
+import com.bangumi.ywylite.ui.component.wallpaperScrim
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.ui.platform.LocalContext
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -148,7 +152,7 @@ fun ProfileScreen(
     ) { padding ->
         if (!uiState.isLoggedIn) {
             LoginContent(
-                modifier = Modifier.padding(padding),
+                modifier = Modifier.padding(padding).fillMaxSize().then(wallpaperScrim(isSystemInDarkTheme())),
                 onLoginSuccess = { user ->
                     uiState = uiState.copy(isLoggedIn = true, user = user, loading = false)
                 }
@@ -158,12 +162,18 @@ fun ProfileScreen(
                 modifier = Modifier
                     .padding(padding)
                     .fillMaxSize()
+                    .then(wallpaperScrim(isSystemInDarkTheme()))
             ) {
                 val user = uiState.user
                 if (user != null) {
+                    val context = LocalContext.current
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .clickable {
+                                val url = "${app.api.currentWebHost}/user/${user.username}"
+                                openInBrowser(context, url)
+                            }
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {

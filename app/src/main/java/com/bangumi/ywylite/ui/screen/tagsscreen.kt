@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.sp
 import com.bangumi.ywylite.data.api.BangumiApi
 import com.bangumi.ywylite.data.model.TagInfo
 import com.bangumi.ywylite.ui.component.ErrorView
+import com.bangumi.ywylite.ui.component.wallpaperScrim
+import androidx.compose.foundation.isSystemInDarkTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -315,7 +317,7 @@ fun TagsScreen(
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+        Column(modifier = Modifier.padding(padding).fillMaxSize().then(wallpaperScrim(isSystemInDarkTheme()))) {
             ScrollableTabRow(
                 selectedTabIndex = tagsSubjectTypes.indexOfFirst { it.first == uiState.selectedType }.coerceAtLeast(0),
                 edgePadding = 16.dp,

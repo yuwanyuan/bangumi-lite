@@ -28,6 +28,8 @@ import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.PagedUserCollection
 import com.bangumi.ywylite.data.model.UserCollection
 import com.bangumi.ywylite.ui.component.*
+import com.bangumi.ywylite.ui.component.wallpaperScrim
+import androidx.compose.foundation.isSystemInDarkTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -254,7 +256,7 @@ fun CollectionScreen(
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+        Column(modifier = Modifier.padding(padding).fillMaxSize().then(wallpaperScrim(isSystemInDarkTheme()))) {
             if (!isLoggedIn) {
                 Box(
                     modifier = Modifier.fillMaxSize(),

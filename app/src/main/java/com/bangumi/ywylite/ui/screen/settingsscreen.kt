@@ -21,6 +21,8 @@ import androidx.compose.ui.unit.dp
 import androidx.activity.compose.rememberLauncherForActivityResult
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.ui.component.openInBrowser
+import com.bangumi.ywylite.ui.component.wallpaperScrim
+import androidx.compose.foundation.isSystemInDarkTheme
 import android.content.Context
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
@@ -33,12 +35,8 @@ private val fontScaleOptions = listOf(
     1.4f to "特大"
 )
 
-/** 背景蒙版档位：第三项即透明度百分比——选档位等于把滑块拨到该值，滑块调整时反查档位名 */
-private val bgMaskPresets = listOf(
-    Triple("light", "浅", 35),
-    Triple("medium", "中", 60),
-    Triple("dark", "深", 85)
-)
+/** 背景蒙版/模糊三级档位：滑块 steps=2 等价于 0/50/100 三档，这里给出档位名供显示 */
+private val bgLevelLabels = listOf("低", "中", "高")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,13 +62,13 @@ fun SettingsScreen(
     val fontScale by app.settings.fontScale.collectAsState(initial = 1f)
     var showFontSizeDialog by remember { mutableStateOf(false) }
 
-    // 主界面背景图：用户自选图片 + 蒙版档位/透明度
-    val bgMaskPreset by app.settings.backgroundMaskPreset.collectAsState(initial = "medium")
+    // 主界面背景图：用户自选图片 + 蒙版透明度/模糊度（各为三级档位）
     val bgMaskAlpha by app.settings.backgroundMaskAlpha.collectAsState(initial = 60)
+    val bgBlurAmount by app.settings.backgroundBlurAmount.collectAsState(initial = 30)
     val bgCustomUri by app.settings.backgroundCustomUri.collectAsState(initial = null)
     var bgMaskAlphaDrag by remember { mutableStateOf<Float?>(null) }
+    var bgBlurDrag by remember { mutableStateOf<Float?>(null) }
     var showBgImageDialog by remember { mutableStateOf(false) }
-    var showBgMaskDialog by remember { mutableStateOf(false) }
     // 自选图：取持久化 URI 权限，避免重启后无法读取
     val pickCustomImage = rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
@@ -268,45 +266,6 @@ fun SettingsScreen(
         )
     }
 
-    if (showBgMaskDialog) {
-        AlertDialog(
-            onDismissRequest = { showBgMaskDialog = false },
-            title = { Text("背景蒙版") },
-            text = {
-                Column {
-                    bgMaskPresets.forEach { (value, short, alpha) ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    scope.launch {
-                                        app.settings.saveBackgroundMaskPreset(value)
-                                        app.settings.saveBackgroundMaskAlpha(alpha)
-                                    }
-                                    showBgMaskDialog = false
-                                }
-                                .padding(vertical = 8.dp)
-                        ) {
-                            RadioButton(selected = bgMaskAlpha == alpha, onClick = {
-                                scope.launch {
-                                    app.settings.saveBackgroundMaskPreset(value)
-                                    app.settings.saveBackgroundMaskAlpha(alpha)
-                                }
-                                showBgMaskDialog = false
-                            })
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("$short（蒙版 $alpha%）")
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showBgMaskDialog = false }) { Text("取消") }
-            }
-        )
-    }
-
     if (showDarkModeDialog) {
         AlertDialog(
             onDismissRequest = { showDarkModeDialog = false },
@@ -416,6 +375,7 @@ fun SettingsScreen(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
+                .then(wallpaperScrim(isSystemInDarkTheme()))
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -464,39 +424,57 @@ fun SettingsScreen(
                         }
                     }
                 )
-                // 已设置背景图时才显示蒙版与透明度调节
+                // 已设置背景图时才显示蒙版透明度与模糊度（各为三级档位）
                 if (bgCustomUri != null) {
-                    SettingsItem(
-                        icon = Icons.Default.Layers,
-                        title = "背景蒙版",
-                        subtitle = "${bgMaskPresets.firstOrNull { it.first == bgMaskPreset }?.second ?: "自定义"}（${bgMaskAlpha}%）",
-                        onClick = { showBgMaskDialog = true }
-                    )
-                    // 透明度滑块：拖动中只改本地状态，松手才落盘并反查档位名
+                    // 透明度三级档位：steps=2 把 0–100 分成 0/50/100 三档
                     ListItem(
                         headlineContent = { Text("蒙版透明度") },
                         supportingContent = {
                             Column {
-                                Text("${(bgMaskAlphaDrag ?: bgMaskAlpha.toFloat()).toInt()}%", style = MaterialTheme.typography.labelSmall)
+                                val v = (bgMaskAlphaDrag ?: bgMaskAlpha.toFloat()).toInt()
+                                Text(
+                                    "${bgLevelLabels.getOrElse((v / 50).coerceIn(0, 2)) { bgLevelLabels[1] }}（$v%）",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
                                 Slider(
                                     value = bgMaskAlphaDrag ?: bgMaskAlpha.toFloat(),
                                     onValueChange = { bgMaskAlphaDrag = it },
                                     onValueChangeFinished = {
                                         val alpha = (bgMaskAlphaDrag ?: bgMaskAlpha.toFloat()).toInt()
                                         bgMaskAlphaDrag = null
-                                        scope.launch {
-                                            app.settings.saveBackgroundMaskAlpha(alpha)
-                                            app.settings.saveBackgroundMaskPreset(
-                                                bgMaskPresets.firstOrNull { it.third == alpha }?.first ?: "custom"
-                                            )
-                                        }
+                                        scope.launch { app.settings.saveBackgroundMaskAlpha(alpha) }
                                     },
                                     valueRange = 0f..100f,
-                                    steps = 0
+                                    steps = 2
                                 )
                             }
                         },
-                        leadingContent = { Icon(Icons.Default.Tune, contentDescription = null) }
+                        leadingContent = { Icon(Icons.Default.Layers, contentDescription = null) }
+                    )
+                    // 模糊度三级档位：控制底栏/控件页面的高斯模糊强度
+                    ListItem(
+                        headlineContent = { Text("背景模糊度") },
+                        supportingContent = {
+                            Column {
+                                val v = (bgBlurDrag ?: bgBlurAmount.toFloat()).toInt()
+                                Text(
+                                    "${bgLevelLabels.getOrElse((v / 50).coerceIn(0, 2)) { bgLevelLabels[1] }}（$v%）",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                                Slider(
+                                    value = bgBlurDrag ?: bgBlurAmount.toFloat(),
+                                    onValueChange = { bgBlurDrag = it },
+                                    onValueChangeFinished = {
+                                        val blur = (bgBlurDrag ?: bgBlurAmount.toFloat()).toInt()
+                                        bgBlurDrag = null
+                                        scope.launch { app.settings.saveBackgroundBlurAmount(blur) }
+                                    },
+                                    valueRange = 0f..100f,
+                                    steps = 2
+                                )
+                            }
+                        },
+                        leadingContent = { Icon(Icons.Default.BlurOn, contentDescription = null) }
                     )
                 }
             }
@@ -569,7 +547,9 @@ private fun SettingsSection(
         ) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleSmall,
+                // 标题字号比展开后的菜单项略小一档：titleMedium 是 16sp，菜单项用 titleLarge 18sp，
+                // 满足「菜单放大一点、比折叠打开的那个字小一点」
+                style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.weight(1f)
             )
@@ -579,10 +559,14 @@ private fun SettingsSection(
                 tint = MaterialTheme.colorScheme.primary
             )
         }
+        // 标题行与展开内容之间用分割线分隔
         AnimatedVisibility(visible = expanded) {
-            // AnimatedVisibility 不自带纵向布局，多个 SettingsItem 必须用 Column 包裹，
-            // 否则会叠在同一位置只露出最后一个
-            Column { content() }
+            Column {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                // AnimatedVisibility 不自带纵向布局，多个 SettingsItem 必须用 Column 包裹，
+                // 否则会叠在同一位置只露出最后一个
+                content()
+            }
         }
     }
 }
@@ -595,7 +579,13 @@ private fun SettingsItem(
     onClick: () -> Unit
 ) {
     ListItem(
-        headlineContent = { Text(title) },
+        headlineContent = {
+            Text(
+                title,
+                // 菜单项标题放大到 titleLarge（18sp），比区块标题 titleMedium（16sp）大一档
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
         supportingContent = { Text(subtitle) },
         leadingContent = {
             Icon(icon, contentDescription = null)

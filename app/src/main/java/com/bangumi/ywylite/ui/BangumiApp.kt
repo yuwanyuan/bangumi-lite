@@ -29,6 +29,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.ui.component.AppBackground
+import com.bangumi.ywylite.ui.component.LocalWallpaperBlur
+import com.bangumi.ywylite.ui.component.WallpaperBlurScope
+import com.bangumi.ywylite.ui.component.wallpaperScrim
 import com.bangumi.ywylite.ui.navigation.Route
 import com.bangumi.ywylite.ui.screen.*
 
@@ -71,11 +74,17 @@ private fun BangumiAppContent(baseDensity: Density) {
 
     // 主界面背景图设置（用户自选图；除详情页外所有页面透出）
     val bgMaskAlpha by app.settings.backgroundMaskAlpha.collectAsState(initial = 60)
+    val bgBlurAmount by app.settings.backgroundBlurAmount.collectAsState(initial = 30)
     val bgCustomUri by app.settings.backgroundCustomUri.collectAsState(initial = null)
 
     val showBottomBar = bottomNavItems.any { it.route == currentDestination?.route }
     // 详情页自带封面背景，不透出主界面背景图
     val showAppBackground = currentDestination?.route != Route.SubjectDetail.path
+    // 壁纸模糊上下文：有壁纸且非详情页时启用，底栏与控件页面据此叠加毛玻璃
+    val wallpaperBlur = WallpaperBlurScope(
+        blurAmount = bgBlurAmount,
+        hasWallpaper = bgCustomUri != null && showAppBackground
+    )
 
     if (!ready) {
         // 配置恢复（token/域名/代理）完成前不渲染页面，避免带默认直连配置抢先发请求
@@ -103,11 +112,17 @@ private fun BangumiAppContent(baseDensity: Density) {
                 maskAlpha = bgMaskAlpha
             )
         }
+    CompositionLocalProvider(LocalWallpaperBlur provides wallpaperBlur) {
     Scaffold(
         containerColor = Color.Transparent,
         bottomBar = {
             if (showBottomBar) {
-                NavigationBar {
+                // 有壁纸时底栏叠加毛玻璃 + 半透明遮罩；无壁纸时退化为普通 NavigationBar
+                val darkTheme = androidx.compose.foundation.isSystemInDarkTheme()
+                NavigationBar(
+                    containerColor = if (wallpaperBlur.hasWallpaper) Color.Transparent else NavigationBarDefaults.containerColor,
+                    modifier = if (wallpaperBlur.hasWallpaper) Modifier.then(wallpaperScrim(darkTheme)) else Modifier
+                ) {
                     bottomNavItems.forEach { item ->
                         NavigationBarItem(
                             icon = { Icon(item.icon, contentDescription = item.label) },
@@ -288,6 +303,7 @@ private fun BangumiAppContent(baseDensity: Density) {
                 }
             }
         }
+    }
     }
     }
 }

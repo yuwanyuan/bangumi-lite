@@ -192,6 +192,9 @@ class BangumiApi(private val context: Context) {
     val nextClient: HttpClient get() = _nextClient
     val webClient: HttpClient get() = _webClient
 
+    /** 当前 Web 端基址（含协议），供 UI 拼接用户主页等浏览器跳转 URL */
+    val currentWebHost: String get() = webBaseUrl
+
     // 直接登录用（OAuth authorization_code 授权码模式，官方不支持 password 直换）
     private val oauthAppId = "bgm72386ac2893460ce3"
     private val oauthAppSecret = "fbb6ceba1289a8854d3a88af87ac6dfd"

@@ -17,6 +17,8 @@ import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.PagedSubject
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
+import com.bangumi.ywylite.ui.component.wallpaperScrim
+import androidx.compose.foundation.isSystemInDarkTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -175,7 +177,7 @@ fun SearchScreen(
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+        Column(modifier = Modifier.padding(padding).fillMaxSize().then(wallpaperScrim(isSystemInDarkTheme()))) {
             // 搜索范围筛选条：条目（所有）/ 动画 / 书籍 / 游戏 / 音乐 / 三次元
             Row(
                 modifier = Modifier

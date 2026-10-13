@@ -17,6 +17,8 @@ import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.data.api.BangumiApi
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
+import com.bangumi.ywylite.ui.component.wallpaperScrim
+import androidx.compose.foundation.isSystemInDarkTheme
 import kotlinx.coroutines.CancellationException
 
 data class TagBrowseUiState(
@@ -119,7 +121,7 @@ fun TagBrowseScreen(
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+        Column(modifier = Modifier.padding(padding).fillMaxSize().then(wallpaperScrim(isSystemInDarkTheme()))) {
             ScrollableTabRow(
                 selectedTabIndex = tagBrowseSubjectTypes.indexOfFirst { it.first == uiState.selectedType }.coerceAtLeast(0),
                 edgePadding = 16.dp,

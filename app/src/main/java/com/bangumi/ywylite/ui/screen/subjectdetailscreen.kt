@@ -443,7 +443,7 @@ private fun SubjectDetailContent(
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
-            alpha = 0.15f
+            alpha = 0.20f
         )
 
         Box(
@@ -453,8 +453,8 @@ private fun SubjectDetailContent(
                     Brush.verticalGradient(
                         colors = listOf(
                             Color.Transparent,
-                            MaterialTheme.colorScheme.background.copy(alpha = 0.6f),
-                            MaterialTheme.colorScheme.background.copy(alpha = 0.95f)
+                            MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
+                            MaterialTheme.colorScheme.background.copy(alpha = 0.90f)
                         )
                     )
                 )

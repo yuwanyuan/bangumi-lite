@@ -113,6 +113,11 @@ class Settings(private val context: Context) {
         prefs[BACKGROUND_MASK_ALPHA_KEY] ?: 60
     }
 
+    /** 背景模糊度 0–100：壁纸存在时底栏/控件页面的高斯模糊强度（0=不模糊） */
+    val backgroundBlurAmount: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[BACKGROUND_BLUR_AMOUNT_KEY] ?: 30
+    }
+
     /** 用户自选背景图的本地 URI（null = 无背景图） */
     val backgroundCustomUri: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[BACKGROUND_CUSTOM_URI_KEY]
@@ -235,6 +240,12 @@ class Settings(private val context: Context) {
         }
     }
 
+    suspend fun saveBackgroundBlurAmount(amount: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[BACKGROUND_BLUR_AMOUNT_KEY] = amount.coerceIn(0, 100)
+        }
+    }
+
     suspend fun saveBackgroundCustomUri(uri: String?) {
         context.dataStore.edit { prefs ->
             if (uri != null) prefs[BACKGROUND_CUSTOM_URI_KEY] = uri
@@ -261,6 +272,7 @@ class Settings(private val context: Context) {
     private val FONT_SCALE_KEY = floatPreferencesKey("font_scale")
     private val BACKGROUND_MASK_PRESET_KEY = stringPreferencesKey("background_mask_preset")
     private val BACKGROUND_MASK_ALPHA_KEY = intPreferencesKey("background_mask_alpha")
+    private val BACKGROUND_BLUR_AMOUNT_KEY = intPreferencesKey("background_blur_amount")
     private val BACKGROUND_CUSTOM_URI_KEY = stringPreferencesKey("background_custom_uri")
     }
 }

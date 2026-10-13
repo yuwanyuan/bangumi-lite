@@ -12,6 +12,8 @@ import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.data.CacheCleanResult
 import com.bangumi.ywylite.data.CacheInfo
 import com.bangumi.ywylite.data.CacheManager
+import com.bangumi.ywylite.ui.component.wallpaperScrim
+import androidx.compose.foundation.isSystemInDarkTheme
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -47,6 +49,7 @@ fun CacheSettingsScreen(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
+                .then(wallpaperScrim(isSystemInDarkTheme()))
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)

@@ -24,6 +24,8 @@ import com.bangumi.ywylite.data.api.BangumiApi
 import com.bangumi.ywylite.data.model.PagedSubject
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
+import com.bangumi.ywylite.ui.component.wallpaperScrim
+import androidx.compose.foundation.isSystemInDarkTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -227,7 +229,7 @@ fun ExploreScreen(
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+        Column(modifier = Modifier.padding(padding).fillMaxSize().then(wallpaperScrim(isSystemInDarkTheme()))) {
             ScrollableTabRow(
                 edgePadding = 16.dp,
                 selectedTabIndex = subjectTypes.indexOfFirst { it.first == uiState.selectedType }.coerceAtLeast(0),

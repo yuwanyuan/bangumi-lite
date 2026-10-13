@@ -16,6 +16,8 @@ import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.CalendarDay
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
+import com.bangumi.ywylite.ui.component.wallpaperScrim
+import androidx.compose.foundation.isSystemInDarkTheme
 import kotlinx.coroutines.CancellationException
 
 data class CalendarUiState(
@@ -75,8 +77,9 @@ fun CalendarScreen(
             )
         }
     ) { padding ->
+        Box(modifier = Modifier.padding(padding).fillMaxSize().then(wallpaperScrim(isSystemInDarkTheme()))) {
         when {
-            uiState.loading -> LoadingView(Modifier.padding(padding))
+            uiState.loading -> LoadingView(Modifier.fillMaxSize())
             uiState.error != null -> ErrorView(
                 message = uiState.error ?: "加载失败",
                 onRetry = {
@@ -86,14 +89,15 @@ fun CalendarScreen(
                         retryKey = uiState.retryKey + 1
                     )
                 },
-                modifier = Modifier.padding(padding)
+                modifier = Modifier.fillMaxSize()
             )
             else -> CalendarContent(
                 uiState = uiState,
                 onDaySelected = { index -> uiState = uiState.copy(selectedDay = index) },
                 onSubjectClick = onSubjectClick,
-                modifier = Modifier.padding(padding)
+                modifier = Modifier.fillMaxSize()
             )
+        }
         }
     }
 }
