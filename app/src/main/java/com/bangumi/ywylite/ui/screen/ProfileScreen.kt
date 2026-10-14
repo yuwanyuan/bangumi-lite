@@ -1,12 +1,15 @@
 package com.bangumi.ywylite.ui.screen
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ViewColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,15 +25,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.bangumi.ywylite.App
+import com.bangumi.ywylite.data.model.TimelineEntry
 import com.bangumi.ywylite.data.model.TimelineItem
 import com.bangumi.ywylite.data.model.User
+import com.bangumi.ywylite.data.model.mergeTimeline
 import com.bangumi.ywylite.ui.component.BangumiLoginPanel
 import com.bangumi.ywylite.ui.component.EmptyView
 import com.bangumi.ywylite.ui.component.ImageUrls
@@ -54,18 +63,51 @@ data class ProfileUiState(
     val timelineError: String? = null
 )
 
-private val timelineTypeLabels = mapOf(
-    "watched" to "📺",
-    "completed" to "✅",
-    "watching" to "👀",
-    "wish" to "⭐",
-    "on_hold" to "⏸",
-    "dropped" to "❌",
-    "comment" to "💬",
-    "other" to "📌"
-)
+/** 左侧导轨：收起时只显示彩色点，点开后拉宽成写着状态的柱形 */
+private val RailCollapsedWidth = 28.dp
+private val RailExpandedWidth = 68.dp
+private val MarkerCollapsedSize = 10.dp
+private val MarkerExpandedWidth = 60.dp
+private val MarkerExpandedHeight = 20.dp
 
-@OptIn(ExperimentalMaterial3Api::class)
+private class RailMetrics(fraction: Float) {
+    val width = lerp(RailCollapsedWidth, RailExpandedWidth, fraction)
+    val markerWidth = lerp(MarkerCollapsedSize, MarkerExpandedWidth, fraction)
+    val markerHeight = lerp(MarkerCollapsedSize, MarkerExpandedHeight, fraction)
+}
+
+private data class TimelineStateStyle(val background: Color, val foreground: Color)
+
+/** 状态的配色：不同颜色的点 = 不同状态，拉宽后柱形里写的就是这个状态名 */
+@Composable
+private fun timelineStateStyle(kind: String): TimelineStateStyle = when (kind) {
+    TimelineItem.STATE_DONE -> TimelineStateStyle(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.onPrimary)
+    TimelineItem.STATE_DOING -> TimelineStateStyle(Color(0xFFFF9800), Color.White)
+    TimelineItem.STATE_WISH -> TimelineStateStyle(Color(0xFF2196F3), Color.White)
+    TimelineItem.STATE_ON_HOLD -> TimelineStateStyle(Color(0xFF9E9E9E), Color.White)
+    TimelineItem.STATE_DROPPED -> TimelineStateStyle(Color(0xFFF44336), Color.White)
+    TimelineItem.STATE_PROGRESS -> TimelineStateStyle(Color(0xFF26A69A), Color.White)
+    TimelineItem.STATE_SAY -> TimelineStateStyle(Color(0xFF4CAF50), Color.White)
+    else -> TimelineStateStyle(MaterialTheme.colorScheme.outline, Color.White)
+}
+
+/** 网页表头 2026-10-9 → 10月9日（不是今年才带上年份） */
+private fun formatTimelineDate(label: String): String {
+    val match = Regex("""(\d{4})-(\d{1,2})-(\d{1,2})""").find(label) ?: return label
+    val year = match.groupValues[1].toIntOrNull() ?: return label
+    val month = match.groupValues[2].toIntOrNull() ?: return label
+    val day = match.groupValues[3].toIntOrNull() ?: return label
+    return if (year == java.time.LocalDate.now().year) "${month}月${day}日" else "${year}年${month}月${day}日"
+}
+
+/** 合并后一条动态的进度标签：单条直接写，多条按时间串起来（6/12话 → 8/12话） */
+private fun progressChipText(labels: List<String>): String? = when {
+    labels.isEmpty() -> null
+    labels.size <= 2 -> labels.joinToString(" → ")
+    else -> "${labels.first()} → ${labels.last()}"
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ProfileScreen(
     onNavigateToSettings: () -> Unit = {},
@@ -75,6 +117,21 @@ fun ProfileScreen(
     val scope = rememberCoroutineScope()
     var uiState by remember { mutableStateOf(ProfileUiState()) }
     var token by remember { mutableStateOf<String?>(null) }
+    // 持久化设置是唯一数据源：本地再存一份镜像会跟 DataStore 的首次/后续发射打架，
+    // 出现「点开了又自己收起」
+    val railExpanded by app.settings.timelineRailExpanded.collectAsState(initial = false)
+
+    // 导轨拉宽是个全局开关，动画值提到列表外面算一次，各行共用同一条曲线
+    val railFraction by animateFloatAsState(
+        targetValue = if (railExpanded) 1f else 0f,
+        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+        label = "timelineRail"
+    )
+    val toggleRail: () -> Unit = {
+        scope.launch { app.settings.saveTimelineRailExpanded(!railExpanded) }
+    }
+    // 网页上「同一次操作」常常是相邻的好几条动态，这里合成一行
+    val entries = remember(uiState.timeline) { mergeTimeline(uiState.timeline) }
 
     LaunchedEffect(Unit) {
         app.settings.accessToken.collect { t -> token = t }
@@ -211,12 +268,41 @@ fun ProfileScreen(
                     HorizontalDivider()
                 }
 
-                Text(
-                    text = "时间线",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 12.dp, top = 6.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "时间线",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    // 左侧导轨的开关：点导轨本身也能切换，这里给一个看得见的入口
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f))
+                            .clickable { toggleRail() }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.ViewColumn,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (railExpanded) "收起状态" else "显示状态",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
 
                 when {
                     uiState.timelineLoading -> LoadingView()
@@ -226,17 +312,31 @@ fun ProfileScreen(
                     ) {
                         Text(uiState.timelineError ?: "加载失败", color = MaterialTheme.colorScheme.error)
                     }
-                    uiState.timeline.isEmpty() -> EmptyView()
+                    entries.isEmpty() -> EmptyView()
                     else -> LazyColumn(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        itemsIndexed(uiState.timeline, key = { _, item -> item.id }) { index, item ->
-                            TimelineItemRow(
-                                item = item,
-                                isLast = index == uiState.timeline.size - 1,
-                                onSubjectClick = onSubjectClick
-                            )
+                        entries.forEachIndexed { index, entry ->
+                            if (entry.dateLabel.isNotEmpty() && entry.dateLabel != entries.getOrNull(index - 1)?.dateLabel) {
+                                stickyHeader(key = "date_${entry.dateLabel}") {
+                                    TimelineDateHeader(
+                                        dateLabel = entry.dateLabel,
+                                        isFirst = index == 0,
+                                        railFraction = railFraction,
+                                        onToggleRail = toggleRail
+                                    )
+                                }
+                            }
+                            item(key = "tml_${entry.key}") {
+                                TimelineEntryRow(
+                                    entry = entry,
+                                    isLast = index == entries.size - 1,
+                                    railFraction = railFraction,
+                                    onToggleRail = toggleRail,
+                                    onSubjectClick = onSubjectClick
+                                )
+                            }
                         }
                         if (uiState.timelineHasMore) {
                             item(key = "timeline_load_more") {
@@ -307,51 +407,145 @@ private fun LoginContent(
     }
 }
 
+/** 列表左侧的导轨单元：一个是「点」，拉宽后是「写好状态的柱」；点一下切换 */
 @Composable
-private fun TimelineItemRow(
-    item: TimelineItem,
+private fun TimelineRailCell(
+    fraction: Float,
     isLast: Boolean,
+    stateKind: String?,
+    stateLabel: String,
+    onToggle: () -> Unit
+) {
+    val metrics = RailMetrics(fraction)
+    val lineColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+    Box(
+        modifier = Modifier
+            .width(metrics.width)
+            .fillMaxHeight()
+            .clickable(onClick = onToggle)
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .width(2.dp)
+                .fillMaxHeight()
+                .background(if (isLast) Color.Transparent else lineColor)
+        )
+        if (stateKind != null) {
+            val style = timelineStateStyle(stateKind)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 4.dp)
+                    .size(metrics.markerWidth, metrics.markerHeight)
+                    .clip(RoundedCornerShape(50))
+                    .background(style.background),
+                contentAlignment = Alignment.Center
+            ) {
+                // 收起时柱宽等于点宽，这段文字被裁掉；展开过程中随宽度淡入
+                Text(
+                    text = stateLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 10.sp,
+                    color = style.foreground,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                    modifier = Modifier.graphicsLayer { alpha = fraction }
+                )
+            }
+        }
+    }
+}
+
+/** 日期分隔：网页按天分组的表头，做成列表的粘性表头，导轨照常连过去 */
+@Composable
+private fun TimelineDateHeader(
+    dateLabel: String,
+    isFirst: Boolean,
+    railFraction: Float,
+    onToggleRail: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+    ) {
+        TimelineRailCell(
+            fraction = railFraction,
+            isLast = false,
+            stateKind = null,
+            stateLabel = "",
+            onToggle = onToggleRail
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Surface(
+            shape = RoundedCornerShape(6.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+            modifier = Modifier.padding(top = if (isFirst) 2.dp else 10.dp, bottom = 6.dp)
+        ) {
+            Text(
+                text = formatTimelineDate(dateLabel),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun TimelineChip(
+    text: String,
+    container: Color,
+    content: Color,
+    maxWidth: Dp
+) {
+    Surface(
+        shape = RoundedCornerShape(4.dp),
+        color = container,
+        modifier = Modifier.widthIn(max = maxWidth)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = content,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+        )
+    }
+}
+
+@Composable
+private fun TimelineEntryRow(
+    entry: TimelineEntry,
+    isLast: Boolean,
+    railFraction: Float,
+    onToggleRail: () -> Unit,
     onSubjectClick: (Int) -> Unit
 ) {
-    val lineColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-    val dotColor = when (item.type) {
-        "watched", "completed" -> MaterialTheme.colorScheme.primary
-        "watching" -> Color(0xFFFF9800)
-        "wish" -> Color(0xFF2196F3)
-        "on_hold" -> Color(0xFF9E9E9E)
-        "dropped" -> Color(0xFFF44336)
-        "comment" -> Color(0xFF4CAF50)
-        else -> MaterialTheme.colorScheme.outline
-    }
     val darkTheme = isSystemInDarkTheme()
     val titleShape = RoundedCornerShape(6.dp)
     val titleGlassTint = MaterialTheme.colorScheme.surface.copy(alpha = if (darkTheme) 0.72f else 0.78f)
+    val displayName = entry.subjectNameCn.ifEmpty { entry.subjectName }
+    val subName = if (entry.subjectNameCn.isNotEmpty() && entry.subjectName != entry.subjectNameCn) entry.subjectName else ""
+    val progressText = progressChipText(entry.progressLabels)
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
-            .then(if (item.subjectId > 0) Modifier.clickable { onSubjectClick(item.subjectId) } else Modifier)
+            .then(if (entry.subjectId > 0) Modifier.clickable { onSubjectClick(entry.subjectId) } else Modifier)
     ) {
-        Box(
-            modifier = Modifier.width(28.dp),
-            contentAlignment = Alignment.TopCenter
-        ) {
-            Box(
-                modifier = Modifier
-                    .width(2.dp)
-                    .fillMaxHeight()
-                    .align(Alignment.TopCenter)
-                    .background(if (isLast) Color.Transparent else lineColor)
-            )
-            Box(
-                modifier = Modifier
-                    .padding(top = 4.dp)
-                    .size(10.dp)
-                    .background(dotColor, CircleShape)
-                    .align(Alignment.TopCenter)
-            )
-        }
+        TimelineRailCell(
+            fraction = railFraction,
+            isLast = isLast,
+            stateKind = entry.stateKind,
+            stateLabel = entry.stateLabel,
+            onToggle = onToggleRail
+        )
 
         Spacer(modifier = Modifier.width(12.dp))
 
@@ -364,9 +558,9 @@ private fun TimelineItemRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                if (item.subjectImage.isNotEmpty()) {
+                if (entry.subjectImage.isNotEmpty()) {
                     AsyncImage(
-                        model = ImageUrls.cover(item.subjectImage, ImageUrls.THUMB),
+                        model = ImageUrls.cover(entry.subjectImage, ImageUrls.THUMB),
                         contentDescription = null,
                         modifier = Modifier
                             .size(40.dp)
@@ -376,8 +570,6 @@ private fun TimelineItemRow(
                 }
 
                 Column(modifier = Modifier.weight(1f)) {
-                    val displayName = item.subjectNameCn.ifEmpty { item.subjectName }
-                    val subName = if (item.subjectNameCn.isNotEmpty() && item.subjectName != item.subjectNameCn) item.subjectName else ""
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (displayName.isNotEmpty()) {
                             Box(
@@ -397,21 +589,24 @@ private fun TimelineItemRow(
                                 )
                             }
                         }
-                        if (item.episodeInfo.isNotEmpty()) {
+                        if (progressText != null) {
                             Spacer(modifier = Modifier.width(6.dp))
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
-                            ) {
-                                Text(
-                                    text = item.episodeInfo,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
-                                )
-                            }
+                            TimelineChip(
+                                text = progressText,
+                                container = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                                content = MaterialTheme.colorScheme.onPrimaryContainer,
+                                maxWidth = 140.dp
+                            )
+                        }
+                        // 一次操作涉及多个条目时，网页给的数量后缀原样带出来（2 部番组、3 本书）
+                        if (entry.batchSuffix.isNotEmpty()) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            TimelineChip(
+                                text = entry.batchSuffix,
+                                container = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                content = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxWidth = 80.dp
+                            )
                         }
                     }
                     if (subName.isNotEmpty()) {
@@ -425,9 +620,9 @@ private fun TimelineItemRow(
                     }
                     // 没有条目的动态（状态、改名、加入小组等）没有"标题"可言，
                     // 正文就放在标题下方的正文位置，不占标题位、不加玻璃
-                    if (displayName.isEmpty() && item.description.isNotEmpty()) {
+                    if (displayName.isEmpty() && entry.description.isNotEmpty()) {
                         Text(
-                            text = item.description,
+                            text = entry.description,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 3,
@@ -442,9 +637,9 @@ private fun TimelineItemRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (item.userRating > 0) {
+                if (entry.userRating > 0) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        repeat(item.userRating.coerceAtMost(10)) {
+                        repeat(entry.userRating.coerceAtMost(10)) {
                             Text(
                                 text = "★",
                                 style = MaterialTheme.typography.labelSmall,
@@ -453,23 +648,23 @@ private fun TimelineItemRow(
                             )
                         }
                         Text(
-                            text = " ${item.userRating}",
+                            text = " ${entry.userRating}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 }
-                if (item.subjectScore > 0) {
+                if (entry.subjectScore > 0) {
                     Text(
-                        text = "★${item.subjectScore}",
+                        text = "★${entry.subjectScore}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (item.subjectRank > 0) {
+                if (entry.subjectRank > 0) {
                     Text(
-                        text = "#${item.subjectRank}",
+                        text = "#${entry.subjectRank}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold
@@ -477,14 +672,14 @@ private fun TimelineItemRow(
                 }
             }
 
-            if (item.userComment.isNotEmpty()) {
+            if (entry.userComment.isNotEmpty()) {
                 Surface(
                     shape = RoundedCornerShape(6.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                     modifier = Modifier.padding(top = 4.dp)
                 ) {
                     Text(
-                        text = item.userComment,
+                        text = entry.userComment,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 3,
@@ -494,9 +689,9 @@ private fun TimelineItemRow(
                 }
             }
 
-            if (item.time.isNotEmpty()) {
+            if (entry.time.isNotEmpty()) {
                 Text(
-                    text = item.time,
+                    text = entry.time,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
                     modifier = Modifier.padding(top = 2.dp)

@@ -1052,8 +1052,40 @@ class BangumiApi(private val context: Context) {
             ?.jsonPrimitive?.content?.toIntOrNull() ?: 0
     }.getOrDefault(0)
 
+    /** 动态正文开头的动词 → 状态分类 + 导轨柱形里写的状态名（文案按网页原文取字） */
+    private fun timelineActionOf(desc: String, isEpisode: Boolean): Pair<String, String> = when {
+        Regex("""^(看过|读过|玩过|听过)""").containsMatchIn(desc) ->
+            (if (isEpisode) TimelineItem.STATE_PROGRESS else TimelineItem.STATE_DONE) to desc.take(2)
+        Regex("""^(在看|在读|在玩|在听)""").containsMatchIn(desc) ->
+            TimelineItem.STATE_DOING to desc.take(2)
+        Regex("""^(想看|想读|想玩|想听)""").containsMatchIn(desc) ->
+            TimelineItem.STATE_WISH to desc.take(2)
+        desc.contains("搁置") -> TimelineItem.STATE_ON_HOLD to "搁置"
+        desc.contains("抛弃") -> TimelineItem.STATE_DROPPED to "抛弃"
+        Regex("""^(完成|看到)""").containsMatchIn(desc) -> TimelineItem.STATE_PROGRESS to desc.take(2)
+        desc.contains("吐槽") -> TimelineItem.STATE_SAY to "吐槽"
+        desc.startsWith("加入") -> TimelineItem.STATE_OTHER to "加入"
+        desc.contains("改名") -> TimelineItem.STATE_OTHER to "改名"
+        else -> TimelineItem.STATE_OTHER to "动态"
+    }
+
     private fun parseTimelineFromHtml(html: String): List<TimelineItem> {
         val items = mutableListOf<TimelineItem>()
+
+        fun plainText(fragment: String): String = android.text.Html
+            .fromHtml(fragment, android.text.Html.FROM_HTML_MODE_LEGACY)
+            .toString()
+            // 图片会被 Html 转成 U+FFFC 占位符；小组动态开头就是图标，留着会变成看不见的"标题"
+            .replace("\uFFFC", "")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+
+        // 网页按天分组：<h4 class="Header">2026-10-9</h4>。每条动态归属到它前面最近的那个表头，
+        // 合并「同一次操作」与列表里的日期分隔都靠它
+        val dateHeaders = Regex("""<h4\b[^>]*>([^<]*)</h4>""", RegexOption.IGNORE_CASE)
+            .findAll(html)
+            .map { it.range.first to plainText(it.groupValues[1]) }
+            .toList()
 
         val itemStartRegex = Regex("""<li\b[^>]*>""", RegexOption.IGNORE_CASE)
         val itemStarts = itemStartRegex.findAll(html).toList()
@@ -1067,17 +1099,12 @@ class BangumiApi(private val context: Context) {
             val blockEnd = itemStarts.getOrNull(index + 1)?.range?.first ?: html.indexOf("</ul>", start.range.last + 1)
                 .takeIf { it >= 0 } ?: html.length
             val block = html.substring(start.range.first, blockEnd)
+            val dateLabel = dateHeaders.lastOrNull { it.first < start.range.first }?.second.orEmpty()
 
             fun attribute(tag: String, name: String): String? = Regex(
                 """\b${Regex.escape(name)}\s*=\s*([\"'])(.*?)\1""",
                 setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
             ).find(tag)?.groupValues?.get(2)
-
-            fun plainText(fragment: String): String = android.text.Html
-                .fromHtml(fragment, android.text.Html.FROM_HTML_MODE_LEGACY)
-                .toString()
-                .replace(Regex("""\s+"""), " ")
-                .trim()
 
             // 描述文本按三种形态依次取：
             // 1) 有条目卡片：截到卡片开始处（info_full 里嵌着表情/星标 <span>，直接找 </span> 会提前截断）
@@ -1147,9 +1174,12 @@ class BangumiApi(private val context: Context) {
                 .find(block)?.groupValues?.get(1)?.let { plainText(it) }.orEmpty()
 
             val progressInfo = Regex("""(\d+)\s*of\s*(\d+)\s*话""").find(desc)
+            // 书籍/漫画的章节进度是「第3话 / 第57话」，没有 ep 链接也没有 n of m 话
+            val chapterInfo = Regex("""第\s*\d+\s*[话話卷章]""").find(desc)
             val episodeDisplay = when {
                 episodeInfo.isNotEmpty() -> episodeInfo
                 progressInfo != null -> "${progressInfo.groupValues[1]}/${progressInfo.groupValues[2]}话"
+                chapterInfo != null -> chapterInfo.value.replace(Regex("""\s+"""), "")
                 else -> ""
             }
 
@@ -1178,6 +1208,24 @@ class BangumiApi(private val context: Context) {
             val isStatus = Regex("""<p\b[^>]*class=[\"'][^\"']*\bstatus\b[^\"']*[\"']""", RegexOption.IGNORE_CASE)
                 .containsMatchIn(block)
 
+            // 进度动态（看过 ep.N / 读过 第N话）与收藏动态的动词可能同名，靠章节链接区分
+            val isEpisode = epLink.isNotEmpty() || Regex("""ep\.\d+""").containsMatchIn(desc) ||
+                Regex("""第\d+[话卷章]""").containsMatchIn(desc)
+            val (stateKind, actionLabel) = timelineActionOf(desc, isEpisode)
+            // 一次勾选多个条目时正文结尾是「2 部番组 / 3 本书」这类数量词，列表里作后缀标签
+            val batchSuffix = Regex("""(\d+)\s*(部番组|部剧场版|本书|本漫画|张唱片|部游戏|个角色)""")
+                .find(desc)?.value?.replace(Regex("""\s+"""), " ").orEmpty()
+            // titleTip 的 title 属性是绝对时间，用于判定「同一次操作」（同一个动作的两条动态同一分钟）
+            val timestamp = Regex("""title=[\"'](\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2})[\"']""", RegexOption.IGNORE_CASE)
+                .find(block)?.let { m ->
+                    runCatching {
+                        java.time.LocalDateTime.of(
+                            m.groupValues[1].toInt(), m.groupValues[2].toInt(), m.groupValues[3].toInt(),
+                            m.groupValues[4].toInt(), m.groupValues[5].toInt()
+                        ).atZone(java.time.ZoneId.systemDefault()).toEpochSecond()
+                    }.getOrDefault(0L)
+                } ?: 0L
+
             items.add(TimelineItem(
                 id = tmlId,
                 type = type,
@@ -1193,7 +1241,12 @@ class BangumiApi(private val context: Context) {
                 userComment = userComment,
                 subjectScore = subjectScore,
                 subjectRank = subjectRank,
-                isStatus = isStatus
+                isStatus = isStatus,
+                timestamp = timestamp,
+                dateLabel = dateLabel,
+                actionLabel = actionLabel,
+                stateKind = stateKind,
+                batchSuffix = batchSuffix
             ))
         }
 

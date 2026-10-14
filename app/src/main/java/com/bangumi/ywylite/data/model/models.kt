@@ -349,8 +349,62 @@ data class TimelineItem(
     val subjectScore: Double = 0.0,
     val subjectRank: Int = 0,
     /** 纯状态/吐槽动态（无关联条目），列表里渲染描述文本而不是条目标题 */
-    val isStatus: Boolean = false
-)
+    val isStatus: Boolean = false,
+    /** 网页 titleTip 里的绝对时间（epoch 秒，时区取系统默认；0 = 没解析到） */
+    val timestamp: Long = 0,
+    /** 网页按天分组的表头文本（如 2026-10-9）；空 = 没解析到 */
+    val dateLabel: String = "",
+    /** 动作原文里的动词（去掉「了」）：看过 / 在看 / 搁置 / 完成 / 加入 …，导轨拉宽后写在柱形里 */
+    val actionLabel: String = "",
+    /** 状态分类，决定导轨点/柱的颜色：done/doing/wish/on_hold/dropped/progress/say/other */
+    val stateKind: String = STATE_OTHER,
+    /** 一次操作涉及多个条目时网页给的数量后缀（如 2 部番组、3 本书），单条目为空 */
+    val batchSuffix: String = ""
+) {
+    companion object {
+        const val STATE_DONE = "done"
+        const val STATE_DOING = "doing"
+        const val STATE_WISH = "wish"
+        const val STATE_ON_HOLD = "on_hold"
+        const val STATE_DROPPED = "dropped"
+        const val STATE_PROGRESS = "progress"
+        const val STATE_SAY = "say"
+        const val STATE_OTHER = "other"
+
+        /** 收藏类状态：同一操作的进度动态优先让位给它们（想问的是收藏状态，不是进度） */
+        val COLLECT_STATES = setOf(STATE_DONE, STATE_DOING, STATE_WISH, STATE_ON_HOLD, STATE_DROPPED)
+    }
+}
+
+/**
+ * 时间线一屏里的一行。
+ *
+ * 网页上「同一次操作」会拆成好几条动态（例：完成最后一话的进度 + 打分收藏），
+ * 它们在这里合成一条，原始动态留在 [items] 里（新 → 旧）。
+ */
+data class TimelineEntry(
+    val items: List<TimelineItem>,
+    val subjectId: Int,
+    val subjectNameCn: String,
+    val subjectName: String,
+    val subjectImage: String,
+    val stateKind: String,
+    val stateLabel: String,
+    /** 进度标签（8/12话、ep.13 …），按时间旧 → 新 */
+    val progressLabels: List<String>,
+    val userRating: Int,
+    val userComment: String,
+    val subjectScore: Double,
+    val subjectRank: Int,
+    val time: String,
+    val dateLabel: String,
+    val batchSuffix: String,
+    val isStatus: Boolean,
+    val description: String
+) {
+    /** 合并行的稳定 key（取最新那条的 ID） */
+    val key: Int get() = items.firstOrNull()?.id ?: 0
+}
 
 /** 标签浏览页（网页版 /anime/tag/... HTML 解析），网页每页固定 24 条 */
 data class TagBrowsePage(

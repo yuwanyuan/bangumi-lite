@@ -123,6 +123,11 @@ class Settings(private val context: Context) {
         prefs[BACKGROUND_CUSTOM_URI_KEY]
     }
 
+    /** 时间线左侧导轨是否拉宽成状态柱（true=柱上写状态名，false=只显示彩色点） */
+    val timelineRailExpanded: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[TIMELINE_RAIL_EXPANDED_KEY] ?: false
+    }
+
     suspend fun saveToken(token: String) {
         context.dataStore.edit { prefs ->
             prefs[ACCESS_TOKEN_KEY] = token
@@ -253,6 +258,12 @@ class Settings(private val context: Context) {
         }
     }
 
+    suspend fun saveTimelineRailExpanded(expanded: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[TIMELINE_RAIL_EXPANDED_KEY] = expanded
+        }
+    }
+
     companion object {
         private val ACCESS_TOKEN_KEY = stringPreferencesKey("access_token")
         private val USERNAME_KEY = stringPreferencesKey("username")
@@ -274,5 +285,6 @@ class Settings(private val context: Context) {
     private val BACKGROUND_MASK_ALPHA_KEY = intPreferencesKey("background_mask_alpha")
     private val BACKGROUND_BLUR_AMOUNT_KEY = intPreferencesKey("background_blur_amount")
     private val BACKGROUND_CUSTOM_URI_KEY = stringPreferencesKey("background_custom_uri")
+    private val TIMELINE_RAIL_EXPANDED_KEY = booleanPreferencesKey("timeline_rail_expanded")
     }
 }
