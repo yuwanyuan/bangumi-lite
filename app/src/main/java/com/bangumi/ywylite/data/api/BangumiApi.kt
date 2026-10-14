@@ -1012,12 +1012,29 @@ class BangumiApi(private val context: Context) {
                 .replace(Regex("""\s+"""), " ")
                 .trim()
 
-            val descHtml = Regex("""<span\b[^>]*class=[\"'][^\"']*\binfo_full\b[^\"']*[\"'][^>]*>([\s\S]*?)</span>""", RegexOption.IGNORE_CASE)
-                .find(block)?.groupValues?.get(1).orEmpty()
-            val desc = plainText(descHtml)
+            // 描述文本按三种形态依次取：
+            // 1) 有条目卡片：截到卡片开始处（info_full 里嵌着表情/星标 <span>，直接找 </span> 会提前截断）
+            // 2) 纯状态动态：取 <p class="status"> 正文，避免把"6 回复 · 6月15天前"这类页脚当内容
+            // 3) 兜底：截到第一个 </span>
+            val cardDescHtml = Regex("""<span\b[^>]*class=[\"'][^\"']*\binfo_full\b[^\"']*[\"'][^>]*>([\s\S]*?)(?=<div class="card)""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1)
+            val statusDescHtml = Regex("""<p\b[^>]*class=[\"'][^\"']*\bstatus\b[^\"']*[\"'][^>]*>([\s\S]*?)</p>""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1)
+            val descHtml = cardDescHtml
+                ?: statusDescHtml
+                ?: Regex("""<span\b[^>]*class=[\"'][^\"']*\binfo_full\b[^\"']*[\"'][^>]*>([\s\S]*?)</span>""", RegexOption.IGNORE_CASE)
+                    .find(block)?.groupValues?.get(1).orEmpty()
+            val desc = plainText(descHtml).ifEmpty {
+                // 纯状态动态如果没有正文（只发表情），退回页脚前的动作文本
+                if (statusDescHtml != null) plainText(cardDescHtml.orEmpty()) else ""
+            }
 
+            // 条目 ID：先找条目链接；链接被服务端扣掉（R18 未授权）时退回 data-subject-id 属性
             val subjectId = Regex("""href\s*=\s*[\"'](?:https?://(?:www\.)?bgm\.tv)?/subject/(\d+)(?:[/?#][^\"']*)?[\"']""", RegexOption.IGNORE_CASE)
-                .find(block)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                .find(block)?.groupValues?.get(1)?.toIntOrNull()
+                ?: Regex("""\bdata-subject-id\s*=\s*[\"'](\d+)[\"']""", RegexOption.IGNORE_CASE)
+                    .find(block)?.groupValues?.get(1)?.toIntOrNull()
+                ?: 0
 
             val titleAnchor = Regex("""<p\b[^>]*class=[\"'][^\"']*\btitle\b[^\"']*[\"'][^>]*>\s*<a\b[^>]*>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE)
                 .find(block)?.groupValues?.get(1).orEmpty()
@@ -1085,6 +1102,9 @@ class BangumiApi(private val context: Context) {
                 else -> "other"
             }
 
+            val isStatus = Regex("""<p\b[^>]*class=[\"'][^\"']*\bstatus\b[^\"']*[\"']""", RegexOption.IGNORE_CASE)
+                .containsMatchIn(block)
+
             items.add(TimelineItem(
                 id = tmlId,
                 type = type,
@@ -1099,7 +1119,8 @@ class BangumiApi(private val context: Context) {
                 userRating = userRating,
                 userComment = userComment,
                 subjectScore = subjectScore,
-                subjectRank = subjectRank
+                subjectRank = subjectRank,
+                isStatus = isStatus
             ))
         }
 

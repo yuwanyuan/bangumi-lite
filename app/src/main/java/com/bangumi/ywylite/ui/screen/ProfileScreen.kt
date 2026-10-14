@@ -218,6 +218,22 @@ fun ProfileScreen(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
 
+                // 有"条目被服务端扣掉"的动态（无 ID、无封面、也不是纯状态）时说明原因：
+                // bgm.tv 只对已登录的网页会话下发 R18 条目，未登录时这些动态只剩动作词
+                if (!app.api.hasWebSession) {
+                    val stripped = uiState.timeline.count {
+                        !it.isStatus && it.subjectId == 0 && it.subjectImage.isEmpty()
+                    }
+                    if (stripped > 0) {
+                        Text(
+                            text = "有 $stripped 条动态的条目未下发：bgm.tv 只对已登录的网页会话展示 R18 内容，登录后重进本页可见",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+
                 when {
                     uiState.timelineLoading -> LoadingView()
                     uiState.timelineError != null -> Box(
@@ -388,10 +404,13 @@ private fun TimelineItemRow(
                                 .padding(horizontal = 6.dp, vertical = 3.dp)
                         ) {
                             Text(
-                                text = displayName.ifEmpty { "条目标题暂缺" },
+                                // 没有条目标题时退回动态描述：纯状态动态显示正文，
+                                // 条目被服务端扣掉的动态（R18 未授权）至少显示动作词，
+                                // 不再渲染成完全空白的一行
+                                text = displayName.ifEmpty { item.description }.ifEmpty { "该动态无可显示内容" },
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium,
-                                maxLines = 1,
+                                maxLines = if (displayName.isEmpty()) 3 else 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }

@@ -347,7 +347,9 @@ data class TimelineItem(
     val userRating: Int = 0,
     val userComment: String = "",
     val subjectScore: Double = 0.0,
-    val subjectRank: Int = 0
+    val subjectRank: Int = 0,
+    /** 纯状态/吐槽动态（无关联条目），列表里渲染描述文本而不是条目标题 */
+    val isStatus: Boolean = false
 )
 
 /** 标签浏览页（网页版 /anime/tag/... HTML 解析），网页每页固定 24 条 */
