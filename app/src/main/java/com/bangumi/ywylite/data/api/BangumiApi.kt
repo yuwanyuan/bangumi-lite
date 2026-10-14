@@ -1043,12 +1043,18 @@ class BangumiApi(private val context: Context) {
             val mainTitle = plainText(titleMainHtml)
             val smallName = Regex("""<small\b[^>]*>([\s\S]*?)</small>""", RegexOption.IGNORE_CASE)
                 .find(titleAnchor)?.groupValues?.get(1)?.let { plainText(it) }.orEmpty()
+            // 没有封面卡片的动态（条目卡片被服务端扣掉时就是这样），标题只存在于
+            // info_full 里「看过 xxx」那个链接的文本中。排除章节链接：那是「看过 ep.13」形态
+            val infoAnchorTitle = Regex("""<a\b([^>]*)>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE)
+                .findAll(descHtml)
+                .firstOrNull { m -> !m.groupValues[1].contains("/subject/ep/", ignoreCase = true) }
+                ?.groupValues?.get(2)?.let { plainText(it) }.orEmpty()
             val dataNameCn = Regex("""data-subject-name-cn\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
                 .find(block)?.groupValues?.get(1)?.let { plainText(it) }.orEmpty()
             val dataName = Regex("""\bdata-subject-name\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
                 .find(block)?.groupValues?.get(1)?.let { plainText(it) }.orEmpty()
-            val subjectNameCn = dataNameCn.ifEmpty { mainTitle }
-            val subjectName = dataName.ifEmpty { smallName.ifEmpty { mainTitle } }
+            val subjectNameCn = dataNameCn.ifEmpty { mainTitle.ifEmpty { infoAnchorTitle } }
+            val subjectName = dataName.ifEmpty { smallName.ifEmpty { mainTitle.ifEmpty { infoAnchorTitle } } }
 
             val imageTag = Regex("""<(?:img|source)\b[^>]*>""", RegexOption.IGNORE_CASE).findAll(block)
                 .map { it.value }

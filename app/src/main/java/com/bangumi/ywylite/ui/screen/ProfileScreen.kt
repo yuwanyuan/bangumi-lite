@@ -398,24 +398,23 @@ private fun TimelineItemRow(
                     val displayName = item.subjectNameCn.ifEmpty { item.subjectName }
                     val subName = if (item.subjectNameCn.isNotEmpty() && item.subjectName != item.subjectNameCn) item.subjectName else ""
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f, fill = false)
-                                .clip(titleShape)
-                                .background(titleGlassTint, titleShape)
-                                .then(wallpaperGlassPanel(darkTheme, titleShape))
-                                .padding(horizontal = 6.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                // 没有条目标题时退回动态描述：纯状态动态显示正文，
-                                // 条目被服务端扣掉的动态（R18 未授权）至少显示动作词，
-                                // 不再渲染成完全空白的一行
-                                text = displayName.ifEmpty { item.description }.ifEmpty { "该动态无可显示内容" },
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = if (displayName.isEmpty()) 3 else 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                        if (displayName.isNotEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .clip(titleShape)
+                                    .background(titleGlassTint, titleShape)
+                                    .then(wallpaperGlassPanel(darkTheme, titleShape))
+                                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                            ) {
+                                Text(
+                                    text = displayName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                         if (item.episodeInfo.isNotEmpty()) {
                             Spacer(modifier = Modifier.width(6.dp))
