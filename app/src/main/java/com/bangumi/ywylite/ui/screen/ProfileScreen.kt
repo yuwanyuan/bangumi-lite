@@ -442,6 +442,17 @@ private fun TimelineItemRow(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    // 没有条目的动态（状态、改名、加入小组等）没有"标题"可言，
+                    // 正文就放在标题下方的正文位置，不占标题位、不加玻璃
+                    if (displayName.isEmpty() && item.description.isNotEmpty()) {
+                        Text(
+                            text = item.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
 

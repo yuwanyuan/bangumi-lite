@@ -977,13 +977,80 @@ class BangumiApi(private val context: Context) {
     ): List<TimelineItem> {
         val url = "/user/${username}/timeline"
         val response = webClient.get(url) {
+            // 会话 Cookie 不进缓存键：不强制回源可能命中登录前缓存的匿名页面，
+            // 而那一版里 bgm.tv 把 R18 条目的封面卡片整段扣掉了
+            headers { append(FORCE_NETWORK_HEADER, "1") }
             url {
                 type?.let { parameters.append("type", it) }
                 parameters.append("page", page.toString())
             }
         }
-        return parseTimelineFromHtml(response.bodyAsText())
+        return fillTimelineSubjects(parseTimelineFromHtml(response.bodyAsText()))
     }
+
+    /** 时间线补齐用的条目摘要（只取列表要显示的三项） */
+    private data class SubjectBrief(val name: String, val nameCn: String, val cover: String)
+
+    /** 翻页会把同一批条目反复送进补齐逻辑，缓存住避免重复请求 */
+    private val subjectBriefCache = ConcurrentHashMap<Int, SubjectBrief>()
+
+    private suspend fun fetchSubjectBrief(id: Int): SubjectBrief? {
+        subjectBriefCache[id]?.let { return it }
+        return runCatching {
+            val subject: Subject = client.get("/v0/subjects/${id}") { withAuth() }.body()
+            SubjectBrief(
+                name = subject.name,
+                nameCn = subject.nameCn,
+                cover = subject.images?.large ?: subject.images?.common
+                    ?: subject.images?.medium ?: subject.image
+            ).also { subjectBriefCache[id] = it }
+        }.getOrNull()
+    }
+
+    /**
+     * 网页里「有条目 ID 但缺封面或标题」的条目用官方接口补齐。
+     *
+     * 这类条目就是 bgm.tv 按会话把封面卡片扣掉的那些（R18 为主）：网页只剩标题链接，
+     * 封面完全不下发。接口按 token 鉴权，与网页会话无关——详情页能显示的封面这里同样能拿到。
+     * 只对缺字段的条目发请求，字段齐全的条目不受影响。
+     */
+    private suspend fun fillTimelineSubjects(items: List<TimelineItem>): List<TimelineItem> {
+        // 先处理「只有章节链接」的动态（看过 ep.N）：正文里连条目链接都被扣掉了，
+        // 只剩章节 URL，用章节接口反查父条目才能拿到封面与标题
+        val resolved = items.map { item ->
+            if (item.subjectId > 0 || item.episodeUrl.isEmpty()) return@map item
+            val episodeId = Regex("""/subject/ep/(\d+)""").find(item.episodeUrl)
+                ?.groupValues?.get(1)?.toIntOrNull() ?: return@map item
+            val subjectId = fetchEpisodeSubjectId(episodeId)
+            if (subjectId > 0) item.copy(subjectId = subjectId) else item
+        }
+
+        val needFill = resolved.filter {
+            it.subjectId > 0 &&
+                (it.subjectImage.isEmpty() || (it.subjectNameCn.isEmpty() && it.subjectName.isEmpty()))
+        }
+        if (needFill.isEmpty()) return resolved
+
+        val briefs = needFill.map { it.subjectId }.distinct()
+            .map { id -> id to fetchSubjectBrief(id) }
+            .toMap()
+
+        return resolved.map { item ->
+            val brief = briefs[item.subjectId] ?: return@map item
+            item.copy(
+                subjectNameCn = item.subjectNameCn.ifEmpty { brief.nameCn },
+                subjectName = item.subjectName.ifEmpty { brief.name },
+                subjectImage = item.subjectImage.ifEmpty { brief.cover }
+            )
+        }
+    }
+
+    /** 章节 → 所属条目 ID（时间线里「看过 ep.N」形态的动态只给了章节链接） */
+    private suspend fun fetchEpisodeSubjectId(episodeId: Int): Int = runCatching {
+        val body = client.get("/v0/episodes/${episodeId}") { withAuth() }.bodyAsText()
+        json.parseToJsonElement(body).jsonObject["subject_id"]
+            ?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+    }.getOrDefault(0)
 
     private fun parseTimelineFromHtml(html: String): List<TimelineItem> {
         val items = mutableListOf<TimelineItem>()
