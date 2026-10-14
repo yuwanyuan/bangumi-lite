@@ -5,6 +5,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -431,7 +434,7 @@ fun SettingsScreen(
                 if (bgCustomUri != null) {
                     // 透明度：连续滑动（0–100，无档位）
                     ListItem(
-                        headlineContent = { Text("蒙版透明度") },
+                        headlineContent = { Text("不透明度") },
                         supportingContent = {
                             Column {
                                 val v = (bgMaskAlphaDrag ?: bgMaskAlpha.toFloat()).toInt()
@@ -449,7 +452,8 @@ fun SettingsScreen(
                                 )
                             }
                         },
-                        leadingContent = { Icon(Icons.Default.Layers, contentDescription = null) }
+                        leadingContent = { Icon(Icons.Default.Layers, contentDescription = null) },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
                     )
                     // 模糊度：连续滑动，控制底栏/设置页玻璃强度
                     ListItem(
@@ -471,7 +475,8 @@ fun SettingsScreen(
                                 )
                             }
                         },
-                        leadingContent = { Icon(Icons.Default.BlurOn, contentDescription = null) }
+                        leadingContent = { Icon(Icons.Default.BlurOn, contentDescription = null) },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
                     )
                 }
             }
@@ -527,6 +532,7 @@ fun SettingsScreen(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun SettingsSection(
     title: String,
@@ -534,12 +540,23 @@ private fun SettingsSection(
 ) {
     // 区块默认折叠：点标题行展开/收起，带连贯的纵向缩放动画
     var expanded by remember { mutableStateOf(false) }
-    Column {
+    val coroutineScope = rememberCoroutineScope()
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    Column(
+        modifier = Modifier.bringIntoViewRequester(bringIntoViewRequester)
+    ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { expanded = !expanded }
+                .clickable {
+                    expanded = !expanded
+                    if (!expanded) return@clickable
+                    coroutineScope.launch {
+                        delay(350)
+                        bringIntoViewRequester.bringIntoView()
+                    }
+                }
                 .padding(top = 8.dp, bottom = 4.dp)
         ) {
             Text(
@@ -591,7 +608,8 @@ private fun SettingsItem(
         leadingContent = {
             Icon(icon, contentDescription = null)
         },
-        modifier = Modifier.clickable(onClick = onClick)
+        modifier = Modifier.clickable(onClick = onClick),
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
     )
 }
 

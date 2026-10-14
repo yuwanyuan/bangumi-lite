@@ -844,7 +844,11 @@ private fun EpisodeBlockSection(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("章节 (${episodes.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                "章节 (${episodes.size})",
+                style = MaterialTheme.typography.titleMedium.copy(shadow = null),
+                fontWeight = FontWeight.Bold
+            )
             if (shouldFold) {
                 Text(
                     text = if (expanded) "收起" else "展开",
@@ -965,7 +969,7 @@ private fun EpisodeBlock(
             ) {
                 Text(
                     text = episode.ep?.toString() ?: episode.sort.toInt().toString(),
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelMedium.copy(shadow = null),
                     color = when {
                         isWatched -> MaterialTheme.colorScheme.onPrimary
                         isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
@@ -978,7 +982,7 @@ private fun EpisodeBlock(
         AnimatedVisibility(visible = isSelected) {
             Text(
                 text = episode.nameCn.ifEmpty { episode.name },
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(shadow = null),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.layout { measurable, constraints ->

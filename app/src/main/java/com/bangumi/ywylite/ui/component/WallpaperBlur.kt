@@ -36,8 +36,8 @@ val LocalWallpaperBlur = staticCompositionLocalOf { WallpaperBlurScope() }
 /** 页底玻璃：0–100 → 0–20dp（弱，保持整页通透融合） */
 private fun Int.toPageBlurRadius(): Float = this / 100f * 20f
 
-/** 面板玻璃：固定更强，比页底明显，让选项块浮起来 */
-private const val PANEL_BLUR_DP = 48f
+/** 面板玻璃：0–100 → 0–48dp，比页底玻璃更强 */
+private fun Int.toPanelBlurRadius(): Float = this / 100f * 48f
 
 /**
  * 标记背景层为 Haze 采样源。仅在设置了壁纸时生效。
@@ -75,13 +75,14 @@ fun wallpaperGlass(darkTheme: Boolean): Modifier {
 @Composable
 fun wallpaperGlassPanel(darkTheme: Boolean): Modifier {
     val scope = LocalWallpaperBlur.current
-    if (!scope.hasWallpaper || scope.hazeState == null) return Modifier
+    val shape = RoundedCornerShape(18.dp)
+    if (!scope.hasWallpaper || scope.hazeState == null) return Modifier.clip(shape)
     // tint 压到很淡：面板要的是「糊开的壁纸透出来」，不是一块实心板
     val tintColor = if (darkTheme) Color.Black.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.22f)
     return Modifier
-        .clip(RoundedCornerShape(18.dp))
+        .clip(shape)
         .hazeChild(scope.hazeState) {
-            blurRadius = PANEL_BLUR_DP.dp
+            blurRadius = scope.blurAmount.toPanelBlurRadius().dp
             backgroundColor = Color.Transparent
             tints = listOf(HazeTint(tintColor))
             fallbackTint = HazeTint(tintColor)

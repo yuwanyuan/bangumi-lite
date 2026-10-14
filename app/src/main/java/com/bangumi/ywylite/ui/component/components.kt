@@ -90,7 +90,8 @@ fun SubjectListItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     /** 条目类型标签（如「动画」「书籍」）；为 null 不显示。搜索结果用以区分混排的类型 */
-    typeLabel: String? = null
+    typeLabel: String? = null,
+    transparentContainer: Boolean = false
 ) {
     // 条目列表文字保持原样：不加黑色描边
     WithoutTextOutline {
@@ -153,7 +154,12 @@ fun SubjectListItem(
                 contentScale = ContentScale.Crop
             )
         },
-        modifier = modifier.clickable(onClick = onClick)
+        modifier = modifier.clickable(onClick = onClick),
+        colors = if (transparentContainer) {
+            ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent)
+        } else {
+            ListItemDefaults.colors()
+        }
     )
     }
 }

@@ -3,7 +3,12 @@ package com.bangumi.ywylite.ui.screen
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -376,32 +381,47 @@ fun CollectionScreen(
                             items(uiState.data, key = { it.subjectId }) { item ->
                                 item.subject?.let { subject ->
                                     Column {
-                                        SubjectListItem(
-                                            subject = subject,
-                                            onClick = { onSubjectClick(subject.id) }
-                                        )
-                                        if (uiState.selectedType == null) {
-                                        item.type?.let { type ->
-                                            val color = collectionTypeColors[type]
-                                            val label = collectionTypeLabels[type]
-                                            if (color != null && label != null) {
-                                                Row(
-                                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                                ) {
-                                                    Surface(
-                                                        modifier = Modifier.size(8.dp),
-                                                        shape = androidx.compose.foundation.shape.CircleShape,
-                                                        color = color
-                                                    ) {}
-                                                    Text(label, style = MaterialTheme.typography.labelSmall, color = color)
-                                                    if (item.rate > 0) {
-                                                        Text("★${item.rate}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                                                    }
-                                            }
+                                        val cardShape = RoundedCornerShape(18.dp)
+                                        val cardBackground = if (isSystemInDarkTheme()) {
+                                            MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+                                        } else {
+                                            MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
                                         }
-                                    }
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(cardShape)
+                                                .background(cardBackground, cardShape)
+                                                .then(wallpaperGlassPanel(isSystemInDarkTheme()))
+                                        ) {
+                                            SubjectListItem(
+                                                subject = subject,
+                                                onClick = { onSubjectClick(subject.id) },
+                                                transparentContainer = true
+                                            )
+                                            if (uiState.selectedType == null) {
+                                                item.type?.let { type ->
+                                                    val color = collectionTypeColors[type]
+                                                    val label = collectionTypeLabels[type]
+                                                    if (color != null && label != null) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                        ) {
+                                                            Surface(
+                                                                modifier = Modifier.size(8.dp),
+                                                                shape = CircleShape,
+                                                                color = color
+                                                            ) {}
+                                                            Text(label, style = MaterialTheme.typography.labelSmall, color = color)
+                                                            if (item.rate > 0) {
+                                                                Text("★${item.rate}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
