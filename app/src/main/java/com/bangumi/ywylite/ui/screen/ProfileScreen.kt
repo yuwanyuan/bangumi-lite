@@ -219,19 +219,22 @@ fun ProfileScreen(
                 )
 
                 // 有"条目被服务端扣掉"的动态（无 ID、无封面、也不是纯状态）时说明原因：
-                // bgm.tv 只对已登录的网页会话下发 R18 条目，未登录时这些动态只剩动作词
-                if (!app.api.hasWebSession) {
-                    val stripped = uiState.timeline.count {
-                        !it.isStatus && it.subjectId == 0 && it.subjectImage.isEmpty()
-                    }
-                    if (stripped > 0) {
-                        Text(
-                            text = "有 $stripped 条动态的条目未下发：bgm.tv 只对已登录的网页会话展示 R18 内容，登录后重进本页可见",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
-                        )
-                    }
+                // bgm.tv 下发 R18 条目的前提是「网页会话已登录」且「账号开了显示NSFW」，
+                // 任一不满足，动态就只剩动作词。这里不区分是哪一种，两种都提示。
+                val stripped = uiState.timeline.count {
+                    !it.isStatus && it.subjectId == 0 && it.subjectImage.isEmpty()
+                }
+                if (stripped > 0) {
+                    Text(
+                        text = if (app.api.hasWebSession) {
+                            "有 $stripped 条动态的条目未下发：R18 内容还需在 bgm.tv 账号设置里开启「显示NSFW内容」"
+                        } else {
+                            "有 $stripped 条动态的条目未下发：R18 内容只对已登录的网页会话下发，请先在「我」页面登录"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                    )
                 }
 
                 when {
