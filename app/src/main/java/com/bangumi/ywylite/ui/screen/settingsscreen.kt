@@ -386,7 +386,7 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            SettingsSection(title = "外观") {
+            SettingsSection(title = "界面") {
                 SettingsItem(
                     icon = Icons.Default.DarkMode,
                     title = "深色模式",
@@ -397,9 +397,6 @@ fun SettingsScreen(
                     },
                     onClick = { showDarkModeDialog = true }
                 )
-            }
-
-            SettingsSection(title = "界面") {
                 SettingsItem(
                     icon = Icons.Default.Home,
                     title = "默认打开",

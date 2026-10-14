@@ -2,6 +2,7 @@ package com.bangumi.ywylite.ui.screen
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -34,6 +35,7 @@ import com.bangumi.ywylite.ui.component.EmptyView
 import com.bangumi.ywylite.ui.component.ImageUrls
 import com.bangumi.ywylite.ui.component.LoadingView
 import com.bangumi.ywylite.ui.component.openInBrowser
+import com.bangumi.ywylite.ui.component.wallpaperGlassPanel
 import androidx.compose.ui.platform.LocalContext
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CancellationException
@@ -321,6 +323,9 @@ private fun TimelineItemRow(
         "comment" -> Color(0xFF4CAF50)
         else -> MaterialTheme.colorScheme.outline
     }
+    val darkTheme = isSystemInDarkTheme()
+    val cardShape = RoundedCornerShape(18.dp)
+    val cardBackground = MaterialTheme.colorScheme.surface.copy(alpha = if (darkTheme) 0.72f else 0.78f)
 
     Row(
         modifier = Modifier
@@ -354,6 +359,10 @@ private fun TimelineItemRow(
             modifier = Modifier
                 .weight(1f)
                 .padding(bottom = 12.dp)
+                .clip(cardShape)
+                .background(cardBackground, cardShape)
+                .then(wallpaperGlassPanel(darkTheme))
+                .padding(12.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
