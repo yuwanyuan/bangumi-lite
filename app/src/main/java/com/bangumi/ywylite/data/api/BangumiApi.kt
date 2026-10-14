@@ -988,37 +988,73 @@ class BangumiApi(private val context: Context) {
     private fun parseTimelineFromHtml(html: String): List<TimelineItem> {
         val items = mutableListOf<TimelineItem>()
 
-        val itemRegex = Regex("""id="tml_(\d+)"[^>]*class="clearit tml_item"[\s\S]*?</li>""")
-        itemRegex.findAll(html).forEach { match ->
-            val tmlId = match.groupValues[1].toIntOrNull() ?: return@forEach
-            val block = match.groupValues[0]
+        val itemStartRegex = Regex("""<li\b[^>]*>""", RegexOption.IGNORE_CASE)
+        val itemStarts = itemStartRegex.findAll(html).toList()
+        itemStarts.forEachIndexed { index, start ->
+            val openingTag = start.value
+            val tmlId = Regex("""\bid\s*=\s*[\"']tml_(\d+)[\"']""", RegexOption.IGNORE_CASE)
+                .find(openingTag)?.groupValues?.get(1)?.toIntOrNull() ?: return@forEachIndexed
+            val classes = Regex("""\bclass\s*=\s*[\"']([^\"']*)[\"']""", RegexOption.IGNORE_CASE)
+                .find(openingTag)?.groupValues?.get(1).orEmpty()
+            if (!classes.split(Regex("""\s+""")).contains("tml_item")) return@forEachIndexed
+            val blockEnd = itemStarts.getOrNull(index + 1)?.range?.first ?: html.indexOf("</ul>", start.range.last + 1)
+                .takeIf { it >= 0 } ?: html.length
+            val block = html.substring(start.range.first, blockEnd)
 
-            val desc = Regex("""class="info_full[^"]*"[^>]*>([\s\S]*?)<div class="card""").find(block)?.groupValues?.get(1)?.let {
-                Regex("""<[^>]+>""").replace(it, "").trim()
-            } ?: Regex("""class="info_full[^"]*"[^>]*>([\s\S]*?)</span>""").find(block)?.groupValues?.get(1)?.let {
-                Regex("""<[^>]+>""").replace(it, "").trim()
-            } ?: ""
+            fun attribute(tag: String, name: String): String? = Regex(
+                """\b${Regex.escape(name)}\s*=\s*([\"'])(.*?)\1""",
+                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+            ).find(tag)?.groupValues?.get(2)
 
-            val subjectLink = Regex("""href="https://bgm\.tv/subject/(\d+)"""").find(block)
-            val subjectId = subjectLink?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            fun plainText(fragment: String): String = android.text.Html
+                .fromHtml(fragment, android.text.Html.FROM_HTML_MODE_LEGACY)
+                .toString()
+                .replace(Regex("""\s+"""), " ")
+                .trim()
 
-            val dataNameCn = Regex("""data-subject-name-cn="([^"]*)"""").find(block)?.groupValues?.get(1)?.trim() ?: ""
-            val dataName = Regex("""data-subject-name="([^"]*)"""").find(block)?.groupValues?.get(1)?.trim() ?: ""
-            val smallName = Regex("""<small class="subtitle grey">([^<]*)</small>""").find(block)?.groupValues?.get(1)?.trim() ?: ""
-            val linkName = Regex("""<p class="title"><a[^>]*>([\s\S]*?)</a>""").find(block)?.groupValues?.get(1)?.let {
-                Regex("""<[^>]+>""").replace(it, "").trim()
-            } ?: ""
+            val descHtml = Regex("""<span\b[^>]*class=[\"'][^\"']*\binfo_full\b[^\"']*[\"'][^>]*>([\s\S]*?)</span>""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1).orEmpty()
+            val desc = plainText(descHtml)
 
-            val subjectNameCn = dataNameCn.ifEmpty { if (smallName.isNotEmpty()) linkName else "" }
-            val subjectName = dataName.ifEmpty { smallName.ifEmpty { linkName } }
+            val subjectId = Regex("""href\s*=\s*[\"'](?:https?://(?:www\.)?bgm\.tv)?/subject/(\d+)(?:[/?#][^\"']*)?[\"']""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
-            val image = Regex("""src="(//lain\.bgm\.tv/[^"]*cover[^"]*)"""").find(block)?.groupValues?.get(1)?.let {
-                if (it.startsWith("//")) "https:$it" else it
-            } ?: ""
+            val titleAnchor = Regex("""<p\b[^>]*class=[\"'][^\"']*\btitle\b[^\"']*[\"'][^>]*>\s*<a\b[^>]*>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1).orEmpty()
+            val titleMainHtml = Regex("""^[\s\S]*?(?=<small\b|$)""", RegexOption.IGNORE_CASE)
+                .find(titleAnchor)?.value.orEmpty()
+            val mainTitle = plainText(titleMainHtml)
+            val smallName = Regex("""<small\b[^>]*>([\s\S]*?)</small>""", RegexOption.IGNORE_CASE)
+                .find(titleAnchor)?.groupValues?.get(1)?.let { plainText(it) }.orEmpty()
+            val dataNameCn = Regex("""data-subject-name-cn\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1)?.let { plainText(it) }.orEmpty()
+            val dataName = Regex("""\bdata-subject-name\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1)?.let { plainText(it) }.orEmpty()
+            val subjectNameCn = dataNameCn.ifEmpty { mainTitle }
+            val subjectName = dataName.ifEmpty { smallName.ifEmpty { mainTitle } }
 
-            val epLink = Regex("""href="(https://bgm\.tv/subject/ep/\d+)"""").find(block)?.groupValues?.get(1) ?: ""
+            val imageTag = Regex("""<(?:img|source)\b[^>]*>""", RegexOption.IGNORE_CASE).findAll(block)
+                .map { it.value }
+                .firstOrNull { tag ->
+                    listOf("src", "data-src", "data-original", "data-lazy-src")
+                        .any { attribute(tag, it)?.contains("cover", ignoreCase = true) == true }
+                }
+            val rawImage = imageTag?.let { tag ->
+                listOf("src", "data-src", "data-original", "data-lazy-src")
+                    .firstNotNullOfOrNull { attribute(tag, it)?.takeIf(String::isNotBlank) }
+            }.orEmpty()
+            val image = when {
+                rawImage.startsWith("//") -> "https:$rawImage"
+                rawImage.startsWith("http://", ignoreCase = true) -> "https://${rawImage.removePrefix("http://")}"
+                rawImage.startsWith("https://", ignoreCase = true) -> rawImage
+                rawImage.startsWith("/") -> "https://bgm.tv$rawImage"
+                else -> rawImage
+            }
 
-            val episodeInfo = Regex("""href="https://bgm\.tv/subject/ep/\d+[^>]*>([^<]+)""").find(block)?.groupValues?.get(1)?.trim() ?: ""
+            val epLink = Regex("""href\s*=\s*[\"']((?:https?://(?:www\.)?bgm\.tv)?/subject/ep/\d+[^\"']*)[\"']""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1)?.let { if (it.startsWith("/")) "https://bgm.tv$it" else it }.orEmpty()
+            val episodeInfo = Regex("""<a\b[^>]*href=[\"'](?:https?://(?:www\.)?bgm\.tv)?/subject/ep/\d+[^\"']*[\"'][^>]*>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1)?.let { plainText(it) }.orEmpty()
 
             val progressInfo = Regex("""(\d+)\s*of\s*(\d+)\s*话""").find(desc)
             val episodeDisplay = when {
@@ -1027,15 +1063,16 @@ class BangumiApi(private val context: Context) {
                 else -> ""
             }
 
-            val time = Regex("""class="titleTip"[^>]*>([^<]*)</span>""").find(block)?.groupValues?.get(1)?.trim() ?: ""
-
-            val userRating = Regex("""class="starlight stars(\d+)"""").find(block)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-
-            val userComment = Regex("""class="comment">[\s\S]*?<span class="starstop[^"]*">[\s\S]*?</span>\s*([^<]+)""").find(block)?.groupValues?.get(1)?.trim() ?: ""
-
-            val subjectScore = Regex("""<small class="fade">([\d.]+)</small>""").find(block)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
-
-            val subjectRank = Regex("""<span class="rank">#(\d+)</span>""").find(block)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val time = Regex("""<span\b[^>]*class=[\"'][^\"']*\btitleTip\b[^\"']*[\"'][^>]*>([^<]*)</span>""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1)?.let { plainText(it) }.orEmpty()
+            val userRating = Regex("""class=[\"'][^\"']*\bstarlight\s+stars(\d+)[^\"']*[\"']""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val userComment = Regex("""class=[\"'][^\"']*\bcomment\b[^\"']*[\"'][^>]*>([\s\S]*?)</div>""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1)?.let { plainText(it) }.orEmpty()
+            val subjectScore = Regex("""<small\b[^>]*class=[\"'][^\"']*\bfade\b[^\"']*[\"'][^>]*>([\d.]+)</small>""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
+            val subjectRank = Regex("""<span\b[^>]*class=[\"'][^\"']*\brank\b[^\"']*[\"'][^>]*>#(\d+)</span>""", RegexOption.IGNORE_CASE)
+                .find(block)?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
             val type = when {
                 desc.contains("看过") -> "watched"

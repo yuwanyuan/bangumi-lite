@@ -324,8 +324,8 @@ private fun TimelineItemRow(
         else -> MaterialTheme.colorScheme.outline
     }
     val darkTheme = isSystemInDarkTheme()
-    val cardShape = RoundedCornerShape(18.dp)
-    val cardBackground = MaterialTheme.colorScheme.surface.copy(alpha = if (darkTheme) 0.72f else 0.78f)
+    val titleShape = RoundedCornerShape(6.dp)
+    val titleGlassTint = MaterialTheme.colorScheme.surface.copy(alpha = if (darkTheme) 0.72f else 0.78f)
 
     Row(
         modifier = Modifier
@@ -359,10 +359,6 @@ private fun TimelineItemRow(
             modifier = Modifier
                 .weight(1f)
                 .padding(bottom = 12.dp)
-                .clip(cardShape)
-                .background(cardBackground, cardShape)
-                .then(wallpaperGlassPanel(darkTheme))
-                .padding(12.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -383,14 +379,22 @@ private fun TimelineItemRow(
                     val displayName = item.subjectNameCn.ifEmpty { item.subjectName }
                     val subName = if (item.subjectNameCn.isNotEmpty() && item.subjectName != item.subjectNameCn) item.subjectName else ""
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = displayName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
-                        )
+                        Box(
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .clip(titleShape)
+                                .background(titleGlassTint, titleShape)
+                                .then(wallpaperGlassPanel(darkTheme, titleShape))
+                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = displayName.ifEmpty { "条目标题暂缺" },
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                         if (item.episodeInfo.isNotEmpty()) {
                             Spacer(modifier = Modifier.width(6.dp))
                             Surface(

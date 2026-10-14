@@ -73,9 +73,11 @@ fun wallpaperGlass(darkTheme: Boolean): Modifier {
  * （Haze 1.5.3 的 hazeChild 无 shape 参数，圆角用 Modifier.clip 实现）
  */
 @Composable
-fun wallpaperGlassPanel(darkTheme: Boolean): Modifier {
+fun wallpaperGlassPanel(
+    darkTheme: Boolean,
+    shape: RoundedCornerShape = RoundedCornerShape(18.dp)
+): Modifier {
     val scope = LocalWallpaperBlur.current
-    val shape = RoundedCornerShape(18.dp)
     if (!scope.hasWallpaper || scope.hazeState == null) return Modifier.clip(shape)
     // tint 压到很淡：面板要的是「糊开的壁纸透出来」，不是一块实心板
     val tintColor = if (darkTheme) Color.Black.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.22f)
