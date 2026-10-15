@@ -2,6 +2,8 @@ package com.bangumi.ywylite.ui.screen
 
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
@@ -202,6 +204,38 @@ fun ExploreScreen(
         }
     }
 
+    val swipePositions = remember {
+        subjectTypes.flatMap { (type, _) ->
+            listOf("rank", "trends", "collects").map { sort -> type to sort }
+        }
+    }
+    fun selectBrowsePosition(type: Int, sort: String) {
+        scope.launch {
+            gridState.scrollToItem(0)
+            uiState = uiState.copy(selectedType = type, selectedSort = sort)
+        }
+    }
+    val browseSwipeModifier = Modifier.pointerInput(uiState.selectedType, uiState.selectedSort) {
+        var dragDistance = 0f
+        detectHorizontalDragGestures(
+            onHorizontalDrag = { _, amount -> dragDistance += amount },
+            onDragEnd = {
+                val currentPosition = uiState.selectedType to uiState.selectedSort
+                val currentIndex = swipePositions.indexOf(currentPosition).let { index ->
+                    if (index >= 0) index else swipePositions.indexOf(uiState.selectedType to "rank")
+                }
+                if (kotlin.math.abs(dragDistance) >= 72f && currentIndex >= 0) {
+                    val targetIndex = (currentIndex + if (dragDistance < 0f) 1 else -1)
+                        .coerceIn(0, swipePositions.lastIndex)
+                    val (type, sort) = swipePositions[targetIndex]
+                    if (targetIndex != currentIndex) selectBrowsePosition(type, sort)
+                }
+                dragDistance = 0f
+            },
+            onDragCancel = { dragDistance = 0f }
+        )
+    }
+
     Scaffold(
         containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
@@ -262,7 +296,7 @@ fun ExploreScreen(
             PullToRefreshBox(
                 isRefreshing = uiState.refreshing,
                 onRefresh = refresh,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize().then(browseSwipeModifier)
             ) {
             LazyVerticalStaggeredGrid(
                 // 自适应列宽：窄屏 3 列左右，平板自动多列

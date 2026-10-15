@@ -3,6 +3,8 @@ package com.bangumi.ywylite.ui.screen
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.*
@@ -120,6 +122,33 @@ fun CollectionScreen(
     val waterfall by app.settings.collectionWaterfall.collectAsState(initial = false)
     val listState = rememberLazyListState()
     val gridState = rememberLazyStaggeredGridState()
+    val swipeCollectionTypes = listOf<Int?>(null, 2, 1)
+    fun selectCollectionType(type: Int?) {
+        scope.launch {
+            if (waterfall) gridState.scrollToItem(0) else listState.scrollToItem(0)
+            uiState = uiState.copy(selectedType = type)
+        }
+    }
+    val collectionSwipeModifier = Modifier.pointerInput(uiState.selectedType, waterfall) {
+        var dragDistance = 0f
+        detectHorizontalDragGestures(
+            onHorizontalDrag = { _, amount -> dragDistance += amount },
+            onDragEnd = {
+                if (kotlin.math.abs(dragDistance) >= 72f) {
+                    val currentIndex = swipeCollectionTypes.indexOf(uiState.selectedType)
+                    val targetIndex = if (currentIndex >= 0) {
+                        currentIndex + if (dragDistance < 0f) 1 else -1
+                    } else {
+                        swipeCollectionTypes.indexOf(2)
+                    }.coerceIn(0, swipeCollectionTypes.lastIndex)
+                    val targetType = swipeCollectionTypes[targetIndex]
+                    if (targetType != uiState.selectedType) selectCollectionType(targetType)
+                }
+                dragDistance = 0f
+            },
+            onDragCancel = { dragDistance = 0f }
+        )
+    }
 
     // 状态落定即写入进程缓存；加载/刷新中的瞬态不入缓存，切页回来不会停在中间态
     LaunchedEffect(uiState) {
@@ -286,7 +315,7 @@ fun CollectionScreen(
                                     // 再次点击当前筛选：弹出/收起类型二级筛选
                                     uiState = uiState.copy(showTypeFilter = !uiState.showTypeFilter)
                                 } else {
-                                    uiState = uiState.copy(selectedType = type)
+                                    selectCollectionType(type)
                                 }
                             },
                             text = {
@@ -321,7 +350,7 @@ fun CollectionScreen(
                 PullToRefreshBox(
                     isRefreshing = uiState.refreshing,
                     onRefresh = refresh,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize().then(collectionSwipeModifier)
                 ) {
                 when {
                     uiState.loading -> LoadingView()
