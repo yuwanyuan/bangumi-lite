@@ -1212,7 +1212,7 @@ class BangumiApi(private val context: Context) {
                 .containsMatchIn(block)
 
             // 进度动态（看过 ep.N / 读过 第N话）与收藏动态的动词可能同名，靠章节链接区分
-            val isEpisode = epLink.isNotEmpty() || progressInfo != null ||
+            val isEpisode = epLink.isNotEmpty() ||
                 Regex("""ep\.\d+""").containsMatchIn(desc) ||
                 Regex("""第\d+[话卷章]""").containsMatchIn(desc)
             val (stateKind, actionLabel) = timelineActionOf(desc, isEpisode)
