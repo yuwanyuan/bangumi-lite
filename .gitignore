@@ -35,3 +35,7 @@ tag_list.html
 timeline_html.html
 timeline_test.json
 trending_test.json
+
+# 本地抓包残留：curl 的 cookie jar 里含 bgm.tv 会话凭据，绝不能提交
+bgm_cookies.txt
+cookies.txt

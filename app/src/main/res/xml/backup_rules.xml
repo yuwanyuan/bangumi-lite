@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 11 及以下（fullBackupContent）。
+  files/datastore 里存着 access_token / refresh_token 与代理密码：这些是凭据，
+  不该跟着云备份或 adb backup 离开设备。设置项本身会在恢复后按默认值重建，重新登录即可。
+-->
+<full-backup-content>
+    <exclude domain="file" path="datastore/" />
+</full-backup-content>

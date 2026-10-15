@@ -120,7 +120,9 @@ data class SubjectDetailUiState(
     val relatedSubjects: List<RelatedSubject> = emptyList(),
     val characters: List<CharacterItem> = emptyList(),
     // 网页版完整 infobox（v0 接口只有部分字段），查看器优先使用
-    val webInfobox: List<InfoboxItem> = emptyList()
+    val webInfobox: List<InfoboxItem> = emptyList(),
+    /** 章节/角色/关联等次要数据是否全部取到；false 时不写进程缓存，避免残缺页面被当成完整数据复用 */
+    val complete: Boolean = true
 )
 
 /**
@@ -129,6 +131,40 @@ data class SubjectDetailUiState(
  */
 private val detailCache = object : LinkedHashMap<Int, SubjectDetailUiState>(16, 0.75f, true) {
     override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, SubjectDetailUiState>) = size > 8
+}
+
+/** 缓存归属的会话代号：换账号（登录/登出）后缓存里的收藏状态、评分、观看进度都不能再用 */
+private var detailCacheGeneration = -1
+
+private fun cachedDetailState(subjectId: Int): SubjectDetailUiState? {
+    if (detailCacheGeneration != App.INSTANCE.api.sessionGeneration) {
+        detailCache.clear()
+        detailCacheGeneration = App.INSTANCE.api.sessionGeneration
+        return null
+    }
+    return detailCache[subjectId]
+}
+
+private fun putCachedDetailState(subjectId: Int, state: SubjectDetailUiState) {
+    detailCacheGeneration = App.INSTANCE.api.sessionGeneration
+    detailCache[subjectId] = state
+}
+
+/** 章节在界面上的称呼：正篇用 ep；SP/OP/ED 的 ep 是 0，退回升序 sort（18.5 就写 18.5，不与第 18 话混淆） */
+private fun episodeLabel(episode: Episode): String {
+    val ep = episode.ep
+    if (ep != null && ep > 0) return ep.toString()
+    val sort = episode.sort
+    return if (sort % 1.0 == 0.0) sort.toInt().toString() else sort.toString()
+}
+
+/** 弹层标题：正篇写「第 N 话」，非正篇按类型指名（OP/ED/SP），别把 OP 说成第 1 话 */
+private fun episodeSheetTitle(episode: Episode): String = when (episode.type) {
+    0 -> "第 ${episodeLabel(episode)} 话"
+    1 -> "SP ${episodeLabel(episode)}"
+    2 -> "OP"
+    3 -> "ED"
+    else -> "章节 ${episodeLabel(episode)}"
 }
 
 val collectionTypeColors = mapOf(
@@ -158,12 +194,9 @@ fun SubjectDetailScreen(
     val app = App.INSTANCE
     val scope = rememberCoroutineScope()
     // 命中进程缓存 → 先展示旧数据（跳过整页 loading），后台增量拉新；未命中 → 正常整页加载
-    val hasCachedDetail = detailCache.containsKey(subjectId)
+    val cachedDetail = cachedDetailState(subjectId)
     var uiState by remember(subjectId) {
-        mutableStateOf(
-            if (hasCachedDetail) detailCache[subjectId]!!.copy(loading = false, error = null)
-            else SubjectDetailUiState()
-        )
+        mutableStateOf(cachedDetail?.copy(loading = false, error = null) ?: SubjectDetailUiState())
     }
     val token by app.settings.accessToken.collectAsState(initial = null)
     val username by app.settings.username.collectAsState(initial = null)
@@ -184,6 +217,10 @@ fun SubjectDetailScreen(
         }
     }
 
+    // 收藏变更代次：用户改过收藏（含取消收藏）后，正在飞行或重试中的同步结果直接作废，
+    // 否则「取消收藏」的 DELETE 之后，先前发出的 GET 会把状态又填回「在看」
+    var collectionGeneration by remember(subjectId) { mutableIntStateOf(0) }
+
     // 拉取当前账号对该条目的收藏（状态/评分/吐槽/标签）与观看进度，写回 uiState
     val syncCollection: suspend () -> Unit = sync@{
         val t = token
@@ -195,8 +232,10 @@ fun SubjectDetailScreen(
         var attempts = 0
         while (attempts < 4) {
             try {
+                val generation = collectionGeneration
                 // null = 服务端明确返回「未收藏」（404）
                 val collection = app.api.getSubjectCollection(u, subjectId, t)
+                if (generation != collectionGeneration) return@sync
                 uiState = uiState.copy(userCollection = collection)
                 val epCollections = runCatching { app.api.getAllEpisodeCollections(subjectId, accessToken = t) }.getOrNull()
                 if (epCollections != null) {
@@ -226,14 +265,32 @@ fun SubjectDetailScreen(
         if (!background) uiState = uiState.copy(loading = true, error = null)
         try {
             val subject = app.api.getSubject(subjectId)
+            var partial = false
+            // 次要数据失败只置 complete=false（不写缓存、也不把正在看的页面打成错误页）。
+            // 不能用 runCatching：它连 CancellationException 一起吞，取消后还会继续写状态
+            suspend fun <T> optional(countsAsPartial: Boolean = true, fallback: T, block: suspend () -> T): T =
+                try {
+                    block()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    if (countsAsPartial) partial = true
+                    fallback
+                }
+
             // getAllEpisodes 内部循环翻页：长番（>100 集）此前只拿到第一页
-            val episodes = runCatching { app.api.getAllEpisodes(subjectId) }.getOrDefault(emptyList())
-            val relatedSubjects = runCatching { app.api.getRelatedSubjects(subjectId) }.getOrDefault(emptyList())
-            val characters = runCatching { app.api.getSubjectCharacters(subjectId) }.getOrDefault(emptyList())
-            val webInfobox = runCatching { app.api.getSubjectWebInfobox(subjectId) }.getOrDefault(emptyList())
+            val episodes = optional(fallback = emptyList<Episode>()) { app.api.getAllEpisodes(subjectId) }
+            val relatedSubjects = optional(fallback = emptyList<RelatedSubject>()) { app.api.getRelatedSubjects(subjectId) }
+            val characters = optional(fallback = emptyList<CharacterItem>()) { app.api.getSubjectCharacters(subjectId) }
+            // 信息盒只有网页版有，R18 条目对未登录会话整段不下发——缺它不算残缺
+            val webInfobox = optional(countsAsPartial = false, fallback = emptyList<InfoboxItem>()) {
+                app.api.getSubjectWebInfobox(subjectId)
+            }
 
             uiState = uiState.copy(
                 loading = false,
+                error = null,
+                complete = !partial,
                 subject = subject,
                 episodes = episodes,
                 relatedSubjects = relatedSubjects,
@@ -248,14 +305,14 @@ fun SubjectDetailScreen(
         }
     }
 
-    LaunchedEffect(subjectId) { loadAll(!hasCachedDetail) }
+    LaunchedEffect(subjectId) { loadAll(cachedDetail == null) }
 
     LaunchedEffect(subjectId, token, username) { syncCollection() }
 
-    // 详情数据落定即写进程缓存，下次进入同一条目走增量刷新
+    // 详情数据落定即写进程缓存（残缺数据不写），下次进入同一条目走增量刷新
     LaunchedEffect(uiState) {
-        if (!uiState.loading && uiState.error == null && uiState.subject != null) {
-            detailCache[subjectId] = uiState
+        if (!uiState.loading && uiState.error == null && uiState.subject != null && uiState.complete) {
+            putCachedDetailState(subjectId, uiState)
         }
     }
 
@@ -329,6 +386,8 @@ fun SubjectDetailScreen(
                         onCollect = { type, comment, rate, tags ->
                             scope.launch {
                                 var failed: String? = null
+                                // 先记账：本次变更之前的同步结果一律作废
+                                collectionGeneration++
                                 try {
                                     app.api.collectSubject(subjectId, type, rate = rate, comment = comment, tags = tags)
                                     if (type == 0) {
@@ -380,30 +439,35 @@ fun SubjectDetailScreen(
                         onMarkWatchedUpTo = { episode ->
                             scope.launch {
                                 if (!ensureCanMark()) return@launch
-                                // legacy 接口按正篇序号记进度；多季度番 sort 可能不从 1 开始，取正篇内的位次
+                                // legacy 的 watched_eps 按「正篇第几话」计，只对正篇集成立：
+                                // 非正篇集（SP/OP/ED）的 sort 是独立编号（如 SP 的 18.5），
+                                // 拿它当正篇序号会把正篇进度改坏（点一集 SP 标掉 18 集）
                                 val mainEps = uiState.episodes.filter { it.type == 0 }.sortedBy { it.sort }
                                 val index = mainEps.indexOfFirst { it.id == episode.id }
-                                val targetSort = if (index >= 0) index + 1 else episode.sort.toInt()
-                                var ok = runCatching { app.api.markWatchedUpTo(subjectId, targetSort) }.isSuccess
-                                if (!ok) {
-                                    // legacy 失败退化为逐集标记（SP 等非正篇集不在 mainEps 内，单独标记该集）。
-                                    // 统计实际成功数：原先无论成败都提示"已标记"，失败被当成成功
-                                    val fallbackEps = if (index >= 0) mainEps.take(index + 1) else listOf(episode)
-                                    val marked = fallbackEps.count { ep ->
-                                        runCatching { app.api.updateEpisodeStatus(ep.id, 2) }.isSuccess
+                                var ok: Boolean
+                                var markedLabel: String
+                                if (index >= 0) {
+                                    markedLabel = "已标记看到第 ${index + 1} 话"
+                                    ok = runCatching { app.api.markWatchedUpTo(subjectId, index + 1) }.isSuccess
+                                    if (!ok) {
+                                        // legacy 失败退化为逐集标记。
+                                        // 统计实际成功数：原先无论成败都提示"已标记"
+                                        val targets = mainEps.take(index + 1)
+                                        ok = targets.isNotEmpty() && targets.count { ep ->
+                                            runCatching { app.api.updateEpisodeStatus(ep.id, 2) }.isSuccess
+                                        } == targets.size
                                     }
-                                    ok = fallbackEps.isNotEmpty() && marked == fallbackEps.size
+                                } else {
+                                    // 非正篇集：只标记这一集，正篇进度一个都不动
+                                    markedLabel = "已标记看过本集"
+                                    ok = runCatching { app.api.updateEpisodeStatus(episode.id, 2) }.isSuccess
                                 }
                                 runCatching { app.api.getAllEpisodeCollections(subjectId) }.getOrNull()?.let { list ->
                                     uiState = uiState.copy(
                                         watchedEpisodes = list.filter { it.type == 2 }.mapNotNull { it.episode?.id }.toSet()
                                     )
                                 }
-                                if (ok) {
-                                    snackbarHostState.showSnackbar("已标记看到第 ${targetSort} 话")
-                                } else {
-                                    snackbarHostState.showSnackbar("标记失败，请重试")
-                                }
+                                snackbarHostState.showSnackbar(if (ok) markedLabel else "标记失败，请重试")
                             }
                         },
                         getEpisodeComments = { episodeId ->
@@ -911,6 +975,7 @@ private fun EpisodeBlockSection(
             EpisodeActionSheet(
                 episode = episode,
                 isWatched = episode.id in watchedEpisodes,
+                canMarkUpTo = episode.type == 0,
                 onToggleWatched = {
                     menuEpisode = null
                     onToggleWatched(episode.id)
@@ -968,7 +1033,7 @@ private fun EpisodeBlock(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = episode.ep?.toString() ?: episode.sort.toInt().toString(),
+                    text = episodeLabel(episode),
                     style = MaterialTheme.typography.labelMedium.copy(shadow = null),
                     color = when {
                         isWatched -> MaterialTheme.colorScheme.onPrimary
@@ -1000,6 +1065,8 @@ private fun EpisodeBlock(
 private fun EpisodeActionSheet(
     episode: Episode,
     isWatched: Boolean,
+    /** 只有正篇集能「看到第 N 话」：legacy 进度接口按正篇序号计，SP/OP/ED 用不了 */
+    canMarkUpTo: Boolean,
     onToggleWatched: () -> Unit,
     onWatchedUpTo: () -> Unit,
     onComments: () -> Unit
@@ -1007,7 +1074,7 @@ private fun EpisodeActionSheet(
     Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
         Text(
             text = buildString {
-                append("第 ${episode.ep ?: episode.sort.toInt()} 话")
+                append(episodeSheetTitle(episode))
                 val name = episode.nameCn.ifEmpty { episode.name }
                 if (name.isNotEmpty()) append("　$name")
             },
@@ -1020,12 +1087,14 @@ private fun EpisodeActionSheet(
             leadingContent = { Icon(Icons.Default.Done, contentDescription = null) },
             modifier = Modifier.clickable(onClick = onToggleWatched)
         )
-        ListItem(
-            headlineContent = { Text("看到第 ${episode.ep ?: episode.sort.toInt()} 话") },
-            supportingContent = { Text("本集及之前全部标为看过") },
-            leadingContent = { Icon(Icons.Default.FastForward, contentDescription = null) },
-            modifier = Modifier.clickable(onClick = onWatchedUpTo)
-        )
+        if (canMarkUpTo) {
+            ListItem(
+                headlineContent = { Text("看到第 ${episodeLabel(episode)} 话") },
+                supportingContent = { Text("本集及之前全部标为看过") },
+                leadingContent = { Icon(Icons.Default.FastForward, contentDescription = null) },
+                modifier = Modifier.clickable(onClick = onWatchedUpTo)
+            )
+        }
         ListItem(
             headlineContent = { Text(if (episode.comment > 0) "当集评论 (${episode.comment})" else "当集评论") },
             leadingContent = { Icon(Icons.Default.Forum, contentDescription = null) },
@@ -1048,16 +1117,20 @@ private fun EpisodeCommentsSheet(
     LaunchedEffect(episode.id, retryKey) {
         loading = true
         error = null
-        runCatching { getComments(episode.id) }
-            .onSuccess { comments = it }
-            .onFailure { error = it.message ?: "加载失败" }
+        try {
+            comments = getComments(episode.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            error = e.message ?: "加载失败"
+        }
         loading = false
     }
 
     Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
         Text(
             text = buildString {
-                append("第 ${episode.ep ?: episode.sort.toInt()} 话 · 评论")
+                append("${episodeSheetTitle(episode)} · 评论")
                 if (episode.comment > 0) append(" (${episode.comment})")
             },
             style = MaterialTheme.typography.titleSmall,
@@ -1206,7 +1279,10 @@ private fun CollectionBar(
     val currentColor = collectionTypeColors[currentType] ?: MaterialTheme.colorScheme.primary
     val currentLabel = collectionTypeLabels[currentType] ?: "收藏"
 
-    LaunchedEffect(currentType, currentRate, currentComment, currentTags) {
+    // 弹层打开期间不回填：openDialog 会顺带触发一次后台同步，而同步在弱网下会重试，
+    // 晚到的响应会把用户正在编辑的状态/评分/吐槽/标签冲掉。关掉弹层后再对齐服务端值
+    LaunchedEffect(currentType, currentRate, currentComment, currentTags, showDialog) {
+        if (showDialog) return@LaunchedEffect
         if (currentType != null) {
             selectedType = currentType
         }
@@ -1375,8 +1451,10 @@ private fun CollectionBar(
                         currentRate > 0 -> currentRate
                         else -> null
                     }
+                    // 只去首尾空白：标签名内部允许有空格（如 Fate Zero），
+                    // 原先把所有空白删掉会提交成另一个标签
                     val cleanTags = selectedTags
-                        .map { it.replace(Regex("""\s+"""), "") }
+                        .map { it.trim() }
                         .filter { it.isNotBlank() }
                         .distinct()
                     onCollect(
@@ -1690,12 +1768,15 @@ private fun SubjectImageViewer(
         }
 }
 
+/** 裸域名的判定式：提到文件级，避免每次重组都重新编译（infobox 有几十行） */
+private val BARE_DOMAIN_REGEX = Regex("""^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}(/\S*)?$""")
+
 /** infobox 值可跳转时返回补全 scheme 的 URL；完整 http(s) 链接或裸域名均识别 */
 private fun asBrowsableUrl(value: String): String? {
     val trimmed = value.trim()
     return when {
         trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
-        Regex("""^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}(/\S*)?$""").matches(trimmed) -> "https://$trimmed"
+        BARE_DOMAIN_REGEX.matches(trimmed) -> "https://$trimmed"
         else -> null
     }
 }
@@ -1930,13 +2011,16 @@ private fun SubjectCommentsSheet(
     LaunchedEffect(subjectId, retryKey) {
         loading = true
         error = null
-        runCatching { getComments(subjectId, 0, 20) }
-            .onSuccess { result ->
-                comments = result.data
-                offset = result.data.size
-                total = result.total
-            }
-            .onFailure { error = it.message ?: "加载失败" }
+        try {
+            val result = getComments(subjectId, 0, 20)
+            comments = result.data
+            offset = result.data.size
+            total = result.total
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            error = e.message ?: "加载失败"
+        }
         loading = false
     }
 
@@ -1986,14 +2070,18 @@ private fun SubjectCommentsSheet(
                             } else {
                                 TextButton(onClick = {
                                     if (loadingMore) return@TextButton
+                                    // 同步置位：否则第二次点击会在协程体执行前通过同一个判断
+                                    loadingMore = true
                                     scope.launch {
-                                        loadingMore = true
-                                        runCatching { getComments(subjectId, offset, 20) }
-                                            .onSuccess { result ->
-                                                comments = (comments + result.data).distinctBy { it.id }
-                                                offset += result.data.size
-                                                total = result.total
-                                            }
+                                        try {
+                                            val result = getComments(subjectId, offset, 20)
+                                            comments = (comments + result.data).distinctBy { it.id }
+                                            offset += result.data.size
+                                            total = result.total
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Exception) {
+                                        }
                                         loadingMore = false
                                     }
                                 }) {

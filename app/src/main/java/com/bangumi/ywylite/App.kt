@@ -182,6 +182,8 @@ class App : Application(), ImageLoaderFactory {
         api.updateToken(null)
         api.refreshToken = null
         api.clearWebSession()
+        // 会话代号 +1：详情页/标签索引等进程级缓存里的收藏状态、评分、观看进度随之下作废
+        api.bumpSessionGeneration()
     }
 
     /**

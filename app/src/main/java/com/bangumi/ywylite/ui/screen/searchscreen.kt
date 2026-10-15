@@ -54,8 +54,15 @@ data class SearchUiState(
 )
 
 /** 搜索状态整体 JSON 化保存：从条目详情返回时还原关键词与结果，而不是回到空白初始页 */
+private const val SAVED_RESULT_LIMIT = 20
+
 private val searchStateSaver = Saver<SearchUiState, String>(
-    save = { Json.encodeToString(SearchUiState.serializer(), it) },
+    // 只存第一页：整份结果（含每条的简介）塞进 Bundle 会在翻很多页后逼近
+    // TransactionTooLargeException 的 1MB 上限。offset 跟着截断长度走，回来继续翻页不会错位。
+    save = { state ->
+        val kept = state.results.take(SAVED_RESULT_LIMIT)
+        Json.encodeToString(SearchUiState.serializer(), state.copy(results = kept, offset = kept.size))
+    },
     restore = {
         runCatching { Json.decodeFromString(SearchUiState.serializer(), it) }
             .getOrDefault(SearchUiState())
@@ -77,7 +84,18 @@ fun SearchScreen(
 
     // 全新搜索（非翻页追加）；type 显式传参，避免与切范围的并发请求互相串值
     suspend fun freshSearch(query: String, type: Int?) {
-        uiState = uiState.copy(loading = true, error = null, offset = 0, loadMoreError = false)
+        // 旧结果立刻撤下：否则新查询失败时界面还留着上一次查询的结果，且错误提示被它挡住。
+        // hasMore 也要一并清掉，不然列表处于加载屏/空态时 nearEnd 会误判成「到底」，
+        // 与这次搜索并发再取一遍 offset=0，之后 offset 多加一页
+        uiState = uiState.copy(
+            loading = true,
+            error = null,
+            offset = 0,
+            hasMore = false,
+            loadMoreError = false,
+            results = emptyList(),
+            total = 0
+        )
         try {
             val result = app.api.searchSubjects(query, type = type?.let { listOf(it) }, offset = 0)
             uiState = uiState.copy(
@@ -110,12 +128,12 @@ fun SearchScreen(
         derivedStateOf {
             val info = listState.layoutInfo
             val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-            uiState.hasMore && !uiState.loadMoreError &&
+            uiState.hasMore && !uiState.loadMoreError && !uiState.loading &&
                 lastVisible >= info.totalItemsCount - 4
         }
     }
     LaunchedEffect(nearEnd, uiState.offset, uiState.loadMoreKey) {
-        if (!nearEnd) return@LaunchedEffect
+        if (!nearEnd || uiState.loading) return@LaunchedEffect
         try {
             val result = app.api.searchSubjects(
                 uiState.query,
@@ -154,7 +172,14 @@ fun SearchScreen(
                                 if (newQuery.isNotBlank()) {
                                     freshSearch(newQuery, uiState.selectedType)
                                 } else {
-                                    uiState = uiState.copy(results = emptyList(), total = 0, offset = 0)
+                                    uiState = uiState.copy(
+                                        results = emptyList(),
+                                        total = 0,
+                                        offset = 0,
+                                        hasMore = false,
+                                        loadMoreError = false,
+                                        error = null
+                                    )
                                 }
                             }
                         },

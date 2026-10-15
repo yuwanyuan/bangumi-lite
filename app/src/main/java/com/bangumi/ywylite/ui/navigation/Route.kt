@@ -1,5 +1,7 @@
 ﻿package com.bangumi.ywylite.ui.navigation
 
+import android.net.Uri
+
 sealed class Route(val path: String) {
     data object Calendar : Route("calendar")
     data object Search : Route("search")
@@ -17,6 +19,12 @@ sealed class Route(val path: String) {
         fun create(typePath: String) = "tags/$typePath"
     }
     data object TagBrowse : Route("tag_browse?tagName={tagName}&tagSlug={tagSlug}&type={type}") {
-        fun create(tagName: String, tagSlug: String, type: Int) = "tag_browse?tagName=${java.net.URLEncoder.encode(tagName, "UTF-8")}&tagSlug=${java.net.URLEncoder.encode(tagSlug, "UTF-8")}&type=$type"
+        /**
+         * 标签名走查询参数，必须用 [Uri.encode]（RFC 3986）而不是 URLEncoder：
+         * 后者是表单编码，空格会编成 '+'，而导航取参时 '+' 不会还原成空格，
+         * 「Fate Zero」这类带空格的标签会请求到不存在的标签。
+         */
+        fun create(tagName: String, tagSlug: String, type: Int) =
+            "tag_browse?tagName=${Uri.encode(tagName)}&tagSlug=${Uri.encode(tagSlug)}&type=$type"
     }
 }

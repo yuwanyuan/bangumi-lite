@@ -14,7 +14,9 @@ import com.bangumi.ywylite.data.Settings
 import com.bangumi.ywylite.ui.component.BangumiLoginPanel
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -26,6 +28,7 @@ fun AccountSettingsScreen(
     var user by remember { mutableStateOf<com.bangumi.ywylite.data.model.User?>(null) }
     var token by remember { mutableStateOf("") }
     var isLoggedIn by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<String?>(null) }
 
     val app = App.INSTANCE
 
@@ -38,6 +41,7 @@ fun AccountSettingsScreen(
 
     LaunchedEffect(isLoggedIn) {
         if (isLoggedIn) {
+            loadError = null
             try {
                 user = app.api.getMe()
             } catch (e: CancellationException) {
@@ -47,13 +51,23 @@ fun AccountSettingsScreen(
                 // 先尝试续期，续期成功用新 token 重试一次
                 if (e.response.status.value == 401) {
                     if (app.recoverFromUnauthorized(token.ifBlank { null })) {
-                        user = runCatching { app.api.getMe() }.getOrNull()
+                        try {
+                            user = app.api.getMe()
+                        } catch (retry: CancellationException) {
+                            throw retry
+                        } catch (retry: Exception) {
+                            loadError = retry.message ?: "用户信息加载失败"
+                        }
                     } else {
                         isLoggedIn = false
                         user = null
                     }
+                } else {
+                    loadError = "用户信息加载失败（HTTP ${e.response.status.value}）"
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // 原先整个 catch 都被吞掉：失败后「已登录」这一行直接消失，看起来像掉登录
+                loadError = e.message ?: "用户信息加载失败"
             }
         }
     }
@@ -87,19 +101,28 @@ fun AccountSettingsScreen(
                 user?.let { u ->
                     Text("已登录: ${u.nickname} (@${u.username})", style = MaterialTheme.typography.bodyLarge)
                 }
-                Text("Token: ${token.take(10)}...", style = MaterialTheme.typography.bodySmall)
+                loadError?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
 
                 OutlinedButton(
                     onClick = {
                         scope.launch {
-                            app.settings.clearToken()
-                            app.api.updateToken(null)
-                            // 登出要连 refresh_token 与网页会话一起清，
-                            // 否则残留的 Cookie/refresh_token 会让下次登录或请求行为异常
-                            app.api.refreshToken = null
-                            app.api.clearWebSession()
+                            // NonCancellable：点完立刻返回上一页也不会中断清理，
+                            // 否则可能只清一半（DataStore 清了、内存 token 与网页 Cookie 还在）
+                            withContext(NonCancellable) {
+                                app.settings.clearToken()
+                                app.api.updateToken(null)
+                                // 登出要连 refresh_token 与网页会话一起清，
+                                // 否则残留的 Cookie/refresh_token 会让下次登录或请求行为异常
+                                app.api.refreshToken = null
+                                app.api.clearWebSession()
+                                // 进程级缓存里的收藏状态/评分/观看进度随会话一起作废
+                                app.api.bumpSessionGeneration()
+                            }
                             isLoggedIn = false
                             user = null
+                            loadError = null
                         }
                     },
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)

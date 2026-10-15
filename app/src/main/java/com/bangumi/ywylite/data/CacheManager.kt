@@ -1,6 +1,8 @@
 package com.bangumi.ywylite.data
 
 import android.content.Context
+import coil.imageLoader
+import com.bangumi.ywylite.App
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -36,37 +38,62 @@ class CacheManager(private val context: Context) {
     suspend fun cleanAllCache(
         onProgress: (Float) -> Unit = {},
     ): CacheCleanResult {
-        val beforeSize = getCacheInfo().totalSize
+        val before = getCacheInfo().totalSize
         withContext(Dispatchers.IO) {
-            clearCoilDiskCache()
-            deleteDirContents(getImageCacheDir())
-            deleteDirContents(getNetworkCacheDir())
+            clearImageCaches()
+            clearNetworkCache()
             onProgress(1.0f)
         }
-        return CacheCleanResult(freedSize = beforeSize)
+        return CacheCleanResult(freedSize = freedSince(before))
     }
 
     suspend fun cleanImageCache(
         onProgress: (Float) -> Unit = {},
     ): CacheCleanResult {
-        val beforeSize = getCacheInfo().imageCacheSize
+        val before = getCacheInfo().imageCacheSize
         withContext(Dispatchers.IO) {
-            clearCoilDiskCache()
-            deleteDirContents(getImageCacheDir())
+            clearImageCaches()
             onProgress(1.0f)
         }
-        return CacheCleanResult(freedSize = beforeSize)
+        return CacheCleanResult(freedSize = freedSince(before))
     }
 
     suspend fun cleanNetworkCache(
         onProgress: (Float) -> Unit = {},
     ): CacheCleanResult {
-        val beforeSize = getCacheInfo().networkCacheSize
+        val before = getCacheInfo().networkCacheSize
         withContext(Dispatchers.IO) {
-            deleteDirContents(getNetworkCacheDir())
+            clearNetworkCache()
             onProgress(1.0f)
         }
-        return CacheCleanResult(freedSize = beforeSize)
+        return CacheCleanResult(freedSize = freedSince(before))
+    }
+
+    /**
+     * 实际释放量 = 清理前大小 - 清理后大小。
+     * 原先直接用「清理前的大小」当结果，删除被占用或部分失败时也会宣称全部清掉了。
+     */
+    private suspend fun freedSince(beforeSize: Long): Long =
+        (beforeSize - getCacheInfo().totalSize).coerceAtLeast(0)
+
+    /**
+     * 图片缓存走 Coil 自己的 API：磁盘缓存有日志文件，从文件系统底下抽文件会让
+     * 运行中的实例失效。内存缓存一并清，否则刚清完的图还在内存里，看着像没清掉。
+     */
+    private fun clearImageCaches() {
+        val loader = context.imageLoader
+        loader.memoryCache?.clear()
+        loader.diskCache?.clear()
+        // 旧版本用的是 Coil 默认目录（cacheDir/coil），残留一并清掉
+        clearCoilDiskCache()
+    }
+
+    /**
+     * 网络缓存走 OkHttp 的 evictAll：同一份 Cache 实例正被 API 客户端使用，
+     * 直接删目录会让它写坏日志。
+     */
+    private fun clearNetworkCache() {
+        App.INSTANCE.api.clearNetworkCache()
     }
 
     private fun getImageCacheDir(): File {

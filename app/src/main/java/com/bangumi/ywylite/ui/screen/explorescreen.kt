@@ -19,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
@@ -27,6 +28,7 @@ import com.bangumi.ywylite.data.model.PagedSubject
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 data class ExploreUiState(
@@ -79,6 +81,9 @@ private val sortOptions = listOf(
     "date" to "日期"
 )
 
+/** 横滑序列里的排序（不含「日期」）：每种类型内 排名 → 热度 → 收藏 */
+private val swipeSorts = listOf("rank", "trends", "collects")
+
 /** 按排序值分发到对应接口：rank/date 走 v0 列表（官方支持），trends/collects 走搜索排序 */
 private suspend fun fetchBrowsePage(
     api: BangumiApi,
@@ -106,6 +111,9 @@ fun ExploreScreen(
     var uiState by remember { mutableStateOf(cachedExploreState ?: ExploreUiState()) }
     var skipAutoLoad by remember { mutableStateOf(cachedExploreState != null) }
     val gridState = rememberLazyStaggeredGridState()
+    // 切换筛选时的内容过渡（滑出旧内容 → 换筛选 → 从另一侧滑入）
+    val filterTransition = rememberFilterTransition()
+    var switchJob by remember { mutableStateOf<Job?>(null) }
 
     // 状态落定即写入进程缓存；加载/刷新中的瞬态不入缓存，切页回来不会停在中间态
     LaunchedEffect(uiState) {
@@ -116,14 +124,23 @@ fun ExploreScreen(
     // 未变化的图片由 Coil 内存缓存直接命中，不会二次下载
     val refresh: () -> Unit = {
         scope.launch {
+            // 记下发起时的筛选：刷新期间用户切了类型/排序，这份响应就属于旧筛选，不能再写回
+            val filterType = uiState.selectedType
+            val filterSort = uiState.selectedSort
+            fun filterChanged() = filterType != uiState.selectedType || filterSort != uiState.selectedSort
             uiState = uiState.copy(refreshing = true)
             try {
                 val result = fetchBrowsePage(
                     api = app.api,
-                    type = uiState.selectedType,
-                    sort = uiState.selectedSort,
+                    type = filterType,
+                    sort = filterSort,
                     offset = 0
                 )
+                if (filterChanged()) {
+                    // 新筛选的首拉正在进行（会自己覆盖列表）：丢弃过期响应，只把转圈停掉
+                    uiState = uiState.copy(refreshing = false)
+                    return@launch
+                }
                 uiState = uiState.copy(
                     refreshing = false,
                     data = result.data.distinctBy { it.id },
@@ -136,7 +153,9 @@ fun ExploreScreen(
                 throw e
             } catch (_: Exception) {
                 uiState = uiState.copy(refreshing = false)
-                Toast.makeText(context, "刷新失败", Toast.LENGTH_SHORT).show()
+                if (!filterChanged()) {
+                    Toast.makeText(context, "刷新失败", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -147,11 +166,12 @@ fun ExploreScreen(
         derivedStateOf {
             val info = gridState.layoutInfo
             val lastVisible = info.visibleItemsInfo.maxOfOrNull { it.index } ?: -1
-            uiState.hasMore && lastVisible >= info.totalItemsCount - 4
+            uiState.hasMore && !uiState.loadMoreError && !uiState.loading && !uiState.refreshing &&
+                lastVisible >= info.totalItemsCount - 4
         }
     }
     LaunchedEffect(nearEnd, uiState.offset, uiState.loadMoreKey) {
-        if (!nearEnd) return@LaunchedEffect
+        if (!nearEnd || uiState.loading || uiState.refreshing) return@LaunchedEffect
         try {
             val result = fetchBrowsePage(
                 api = app.api,
@@ -182,7 +202,10 @@ fun ExploreScreen(
             skipAutoLoad = false
             return@LaunchedEffect
         }
-        uiState = uiState.copy(loading = true, offset = 0, error = null, loadMoreError = false)
+        // hasMore 必须一并清掉：列表被换成加载屏时 layoutInfo 为空，
+        // nearEnd 会误判成「到底」而与这次首拉并发再取一遍 offset=0，
+        // 之后 offset 多加一页 → 中间整页条目被跳过
+        uiState = uiState.copy(loading = true, offset = 0, hasMore = false, error = null, loadMoreError = false)
         try {
             val result = fetchBrowsePage(
                 api = app.api,
@@ -206,29 +229,55 @@ fun ExploreScreen(
 
     val swipePositions = remember {
         subjectTypes.flatMap { (type, _) ->
-            listOf("rank", "trends", "collects").map { sort -> type to sort }
+            swipeSorts.map { sort -> type to sort }
         }
+    }
+    // 切换中的目标位置：过渡还没走完时 uiState 仍是旧筛选，
+    // 下一次滑动要相对「正在切过去的那一屏」算方向，否则中间那次滑动会被当成原地不动丢掉
+    var pendingPosition by remember { mutableStateOf<Pair<Int, String>?>(null) }
+    /** 横滑序列里的位次；「日期」不在序列里，按本类型序列的入口位次算 */
+    fun browsePositionIndex(type: Int, sort: String): Int {
+        val exact = swipePositions.indexOf(type to sort)
+        if (exact >= 0) return exact
+        val typeIndex = subjectTypes.indexOfFirst { it.first == type }
+        return (if (typeIndex >= 0) typeIndex else 0) * swipeSorts.size
     }
     fun selectBrowsePosition(type: Int, sort: String) {
-        scope.launch {
-            gridState.scrollToItem(0)
-            uiState = uiState.copy(selectedType = type, selectedSort = sort)
+        val from = pendingPosition ?: (uiState.selectedType to uiState.selectedSort)
+        if (type == from.first && sort == from.second) return
+        // 方向按序列位次算：目标位次在更后面 = 向左切换（与左滑同一个方向）
+        val forward = browsePositionIndex(type, sort) > browsePositionIndex(from.first, from.second)
+        pendingPosition = type to sort
+        switchJob?.cancel()
+        switchJob = scope.launch {
+            filterTransition.run(forward) {
+                gridState.scrollToItem(0)
+                uiState = uiState.copy(selectedType = type, selectedSort = sort)
+            }
+            // 过渡跑完且没有更新的一次切换，交回给 uiState 作为基准
+            if (pendingPosition == (type to sort)) pendingPosition = null
         }
     }
-    val browseSwipeModifier = Modifier.pointerInput(uiState.selectedType, uiState.selectedSort) {
+    // 阈值按 dp 换算：裸像素在不同密度屏上手感差一倍
+    val swipeThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
+    val browseSwipeModifier = Modifier.pointerInput(uiState.selectedType, uiState.selectedSort, swipeThresholdPx) {
         var dragDistance = 0f
         detectHorizontalDragGestures(
             onHorizontalDrag = { _, amount -> dragDistance += amount },
             onDragEnd = {
-                val currentPosition = uiState.selectedType to uiState.selectedSort
-                val currentIndex = swipePositions.indexOf(currentPosition).let { index ->
-                    if (index >= 0) index else swipePositions.indexOf(uiState.selectedType to "rank")
-                }
-                if (kotlin.math.abs(dragDistance) >= 72f && currentIndex >= 0) {
-                    val targetIndex = (currentIndex + if (dragDistance < 0f) 1 else -1)
-                        .coerceIn(0, swipePositions.lastIndex)
-                    val (type, sort) = swipePositions[targetIndex]
-                    if (targetIndex != currentIndex) selectBrowsePosition(type, sort)
+                if (kotlin.math.abs(dragDistance) >= swipeThresholdPx) {
+                    val forward = dragDistance < 0f
+                    val currentIndex = swipePositions.indexOf(uiState.selectedType to uiState.selectedSort)
+                    val target = if (currentIndex >= 0) {
+                        swipePositions[(currentIndex + if (forward) 1 else -1).coerceIn(0, swipePositions.lastIndex)]
+                    } else {
+                        // 「日期」不在横滑序列里：只在本类型的序列内移动
+                        // （向后滑 → 排名，向前滑 → 收藏），不跨到别的类型
+                        uiState.selectedType to if (forward) swipeSorts.first() else swipeSorts.last()
+                    }
+                    if (target != (uiState.selectedType to uiState.selectedSort)) {
+                        selectBrowsePosition(target.first, target.second)
+                    }
                 }
                 dragDistance = 0f
             },
@@ -271,7 +320,8 @@ fun ExploreScreen(
                 subjectTypes.forEach { (type, label) ->
                     Tab(
                         selected = uiState.selectedType == type,
-                        onClick = { uiState = uiState.copy(selectedType = type) },
+                        // 与横滑一致：切类型/排序后列表回到顶部，不沿用旧滚动位置
+                        onClick = { selectBrowsePosition(type, uiState.selectedSort) },
                         text = { Text(label) }
                     )
                 }
@@ -287,7 +337,7 @@ fun ExploreScreen(
                 sortOptions.forEach { (value, label) ->
                     FilterChip(
                         selected = uiState.selectedSort == value,
-                        onClick = { uiState = uiState.copy(selectedSort = value) },
+                        onClick = { selectBrowsePosition(uiState.selectedType, value) },
                         label = { Text(label, style = MaterialTheme.typography.labelMedium) }
                     )
                 }
@@ -296,7 +346,10 @@ fun ExploreScreen(
             PullToRefreshBox(
                 isRefreshing = uiState.refreshing,
                 onRefresh = refresh,
-                modifier = Modifier.fillMaxSize().then(browseSwipeModifier)
+                // 过渡挂在内容区上（类型 tab 与排序 chip 留在原地不跟着动）
+                modifier = Modifier.fillMaxSize()
+                    .then(browseSwipeModifier)
+                    .then(filterTransition.modifier)
             ) {
             LazyVerticalStaggeredGrid(
                 // 自适应列宽：窄屏 3 列左右，平板自动多列

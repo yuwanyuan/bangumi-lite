@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ 的备份/迁移规则。凭据（token、refresh_token、代理密码）都在
+  files/datastore 下，云端备份与换机迁移都排除掉；缓存目录本身不在备份范围内。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="datastore/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="datastore/" />
+    </device-transfer>
+</data-extraction-rules>

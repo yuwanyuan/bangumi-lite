@@ -1,15 +1,24 @@
 package com.bangumi.ywylite.ui.screen
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
@@ -17,6 +26,8 @@ import com.bangumi.ywylite.data.model.CalendarDay
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 data class CalendarUiState(
     val loading: Boolean = true,
@@ -34,7 +45,48 @@ fun CalendarScreen(
     onSearchClick: () -> Unit = {}
 ) {
     val app = App.INSTANCE
+    val scope = rememberCoroutineScope()
     var uiState by remember { mutableStateOf(CalendarUiState()) }
+    // 左右滑动切星期，与浏览页/收藏页共用同一套过渡（滑出旧的一屏 → 换星期 → 从另一侧滑入）
+    val filterTransition = rememberFilterTransition()
+    val listState = rememberLazyListState()
+    var switchJob by remember { mutableStateOf<Job?>(null) }
+    // 切换中的目标：过渡没走完时 uiState 还是旧的一天，下一次滑动要相对它算方向
+    var pendingDay by remember { mutableStateOf<Int?>(null) }
+    val swipeThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
+
+    fun selectDay(index: Int) {
+        // 首尾边界不越界（向后滑过星期日、向前滑过星期一都不动）
+        if (index !in uiState.data.indices) return
+        val from = pendingDay ?: uiState.selectedDay
+        if (index == from) return
+        val forward = index > from
+        pendingDay = index
+        switchJob?.cancel()
+        switchJob = scope.launch {
+            filterTransition.run(forward) {
+                // 每天的列表都在同一个 LazyColumn 里，换天要显式回到顶部
+                listState.scrollToItem(0)
+                uiState = uiState.copy(selectedDay = index)
+            }
+            if (pendingDay == index) pendingDay = null
+        }
+    }
+
+    val daySwipeModifier = Modifier.pointerInput(uiState.selectedDay, uiState.data.size, swipeThresholdPx) {
+        var dragDistance = 0f
+        detectHorizontalDragGestures(
+            onHorizontalDrag = { _, amount -> dragDistance += amount },
+            onDragEnd = {
+                if (kotlin.math.abs(dragDistance) >= swipeThresholdPx) {
+                    val from = pendingDay ?: uiState.selectedDay
+                    selectDay(from + if (dragDistance < 0f) 1 else -1)
+                }
+                dragDistance = 0f
+            },
+            onDragCancel = { dragDistance = 0f }
+        )
+    }
 
     LaunchedEffect(uiState.retryKey) {
         uiState = uiState.copy(loading = true, error = null)
@@ -89,11 +141,18 @@ fun CalendarScreen(
                 },
                 modifier = Modifier.fillMaxSize()
             )
+            // 服务端返回空列表时原先整页空白，给个说明
+            uiState.data.isEmpty() -> EmptyView("暂无放送数据")
             else -> CalendarContent(
                 uiState = uiState,
-                onDaySelected = { index -> uiState = uiState.copy(selectedDay = index) },
+                onDaySelected = { index -> selectDay(index) },
                 onSubjectClick = onSubjectClick,
-                modifier = Modifier.fillMaxSize()
+                listState = listState,
+                // 手势与过渡只挂在放送列表区域：顶部星期 tab 要保留自己的横向滚动
+                contentModifier = Modifier
+                    .fillMaxSize()
+                    .then(daySwipeModifier)
+                    .then(filterTransition.modifier)
             )
         }
         }
@@ -105,9 +164,10 @@ private fun CalendarContent(
     uiState: CalendarUiState,
     onDaySelected: (Int) -> Unit,
     onSubjectClick: (Int) -> Unit,
-    modifier: Modifier = Modifier
+    listState: LazyListState,
+    contentModifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize()) {
         ScrollableTabRow(
             edgePadding = 16.dp,
             selectedTabIndex = uiState.selectedDay,
@@ -128,23 +188,26 @@ private fun CalendarContent(
 
         val currentDay = uiState.data.getOrNull(uiState.selectedDay)
 
-        if (currentDay != null) {
-            if (currentDay.items.isEmpty()) {
-                EmptyView("今日没有放送")
-            } else {
-                // 懒加载：一天几十个条目，非 Lazy 的 Column 会一次性组合全部条目、
-                // 所有封面同时挤进图片加载队列（每主机并发有限），表现为图片长时间出不来
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    items(currentDay.items, key = { it.id }) { subject ->
-                        CalendarItem(
-                            subject = subject,
-                            onClick = { onSubjectClick(subject.id) }
-                        )
+        Box(modifier = contentModifier) {
+            when {
+                currentDay == null -> {}
+                currentDay.items.isEmpty() -> EmptyView("今日没有放送")
+                else -> {
+                    // 懒加载：一天几十个条目，非 Lazy 的 Column 会一次性组合全部条目、
+                    // 所有封面同时挤进图片加载队列（每主机并发有限），表现为图片长时间出不来
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(currentDay.items, key = { it.id }) { subject ->
+                            CalendarItem(
+                                subject = subject,
+                                onClick = { onSubjectClick(subject.id) }
+                            )
+                        }
                     }
                 }
             }
@@ -157,5 +220,22 @@ private fun CalendarItem(
     subject: SubjectSmall,
     onClick: () -> Unit
 ) {
-    SubjectListItem(subject = subject, onClick = onClick)
+    // 与收藏页列表同一套毛玻璃：有壁纸时条目行采样背后壁纸做模糊，
+    // 无壁纸时 wallpaperGlassPanel 退化为仅裁圆角，外观与原先一致
+    val darkTheme = isSystemInDarkTheme()
+    val shape = RoundedCornerShape(18.dp)
+    val background = if (darkTheme) {
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+    } else {
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(background, shape)
+            .then(wallpaperGlassPanel(darkTheme, shape))
+    ) {
+        SubjectListItem(subject = subject, onClick = onClick, transparentContainer = true)
+    }
 }

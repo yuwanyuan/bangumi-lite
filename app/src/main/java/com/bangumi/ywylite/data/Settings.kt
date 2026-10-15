@@ -2,12 +2,20 @@ package com.bangumi.ywylite.data
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
-val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "bangumi_settings")
+/**
+ * 设置存储。corruptionHandler：文件损坏（写入中断、磁盘异常）时回落到空配置重新开始，
+ * 否则每次启动都会在读取时抛 CorruptionException，卡在启动门闸上。
+ */
+val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "bangumi_settings",
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() }
+)
 
 /** 代理配置快照，供启动时一次性恢复 */
 data class ProxySettings(

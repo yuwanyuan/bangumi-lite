@@ -30,8 +30,11 @@ import com.bangumi.ywylite.ui.component.wallpaperGlassPanel
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import android.content.Context
+import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** 字体大小档位：系统字号基础上的乘率 */
 private val fontScaleOptions = listOf(
@@ -77,11 +80,16 @@ fun SettingsScreen(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            runCatching {
+            // 权限没拿到就不能长期保存：图片本次能显示、重启后必然读不到。
+            // 这种「过一会儿自己消失」要当场说清楚，不能静默存下 URI
+            val granted = runCatching {
                 context.contentResolver.takePersistableUriPermission(
                     uri,
                     android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
+            }.isSuccess
+            if (!granted) {
+                Toast.makeText(context, "系统未授予长期读取权限，这张图重启后可能失效", Toast.LENGTH_LONG).show()
             }
             scope.launch { app.settings.saveBackgroundCustomUri(uri.toString()) }
         }
@@ -112,7 +120,9 @@ fun SettingsScreen(
         if (targets.isEmpty()) return@LaunchedEffect
         pingResults = targets.associateWith { null }
         targets.forEach { url ->
-            scope.launch {
+            // 用 effect 自己的作用域：关掉弹窗即取消未完成的探活，
+            // 结果不会串进下一次打开弹窗的状态（原先挂在整页 scope 上，弹窗关了还在跑）
+            launch {
                 val ok = runCatching { app.api.pingHost(url) }.getOrDefault(false)
                 pingResults = pingResults + (url to ok)
             }
@@ -318,8 +328,13 @@ fun SettingsScreen(
                             pingState = pingResults[value],
                             onSelect = {
                                 scope.launch {
-                                    app.settings.saveApiHost(value)
-                                    app.api.updateApiHost(apiHost = value)
+                                    // 落盘与切换必须成对完成：只落盘不改运行中的客户端会
+                                    // 「设置显示已切换、请求还走旧地址」。NonCancellable 保证
+                                    // 选完立刻返回上一页也不会中断
+                                    withContext(NonCancellable) {
+                                        app.settings.saveApiHost(value)
+                                        app.api.updateApiHost(apiHost = value)
+                                    }
                                 }
                                 showApiHostDialog = false
                             }
@@ -346,8 +361,10 @@ fun SettingsScreen(
                             pingState = pingResults[value],
                             onSelect = {
                                 scope.launch {
-                                    app.settings.saveWebHost(value)
-                                    app.api.updateApiHost(webHost = value)
+                                    withContext(NonCancellable) {
+                                        app.settings.saveWebHost(value)
+                                        app.api.updateApiHost(webHost = value)
+                                    }
                                 }
                                 showWebHostDialog = false
                             }
@@ -441,8 +458,11 @@ fun SettingsScreen(
                                     onValueChange = { bgMaskAlphaDrag = it },
                                     onValueChangeFinished = {
                                         val alpha = (bgMaskAlphaDrag ?: bgMaskAlpha.toFloat()).toInt()
-                                        bgMaskAlphaDrag = null
-                                        scope.launch { app.settings.saveBackgroundMaskAlpha(alpha) }
+                                        scope.launch {
+                                            app.settings.saveBackgroundMaskAlpha(alpha)
+                                            // 落盘后再交回本地值：否则这段时间滑块会先弹回旧值再跳回来
+                                            bgMaskAlphaDrag = null
+                                        }
                                     },
                                     valueRange = 0f..100f,
                                     steps = 0
@@ -464,8 +484,11 @@ fun SettingsScreen(
                                     onValueChange = { bgBlurDrag = it },
                                     onValueChangeFinished = {
                                         val blur = (bgBlurDrag ?: bgBlurAmount.toFloat()).toInt()
-                                        bgBlurDrag = null
-                                        scope.launch { app.settings.saveBackgroundBlurAmount(blur) }
+                                        scope.launch {
+                                            app.settings.saveBackgroundBlurAmount(blur)
+                                            // 落盘后再交回本地值，避免滑块回弹
+                                            bgBlurDrag = null
+                                        }
                                     },
                                     valueRange = 0f..100f,
                                     steps = 0

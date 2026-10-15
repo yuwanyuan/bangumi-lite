@@ -79,12 +79,15 @@ fun TagBrowseScreen(
         derivedStateOf {
             val info = gridState.layoutInfo
             val lastVisible = info.visibleItemsInfo.maxOfOrNull { it.index } ?: -1
+            // loading/error 时列表被换成加载屏或错误页，layoutInfo 为空，
+            // lastVisible(-1) >= 0-4 会误判成「到底」，于是与首拉并发翻同一页
             uiState.page < uiState.totalPages && !uiState.loadMoreError &&
+                !uiState.loading && uiState.error == null &&
                 lastVisible >= info.totalItemsCount - 4
         }
     }
     LaunchedEffect(nearEnd, uiState.page, uiState.loadMoreKey) {
-        if (!nearEnd) return@LaunchedEffect
+        if (!nearEnd || uiState.loading) return@LaunchedEffect
         try {
             val nextPage = uiState.page + 1
             val result = api.browseByTag(type = uiState.selectedType, tag = tagSlug, page = nextPage)

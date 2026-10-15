@@ -9,9 +9,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.Settings
@@ -21,6 +23,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 enum class TestState { Idle, Testing, Success, Failed }
+
+/** 代理类型二选一：原先的自由文本只有全大写 "SOCKS" 才生效，socks5 会静默按 HTTP 处理 */
+private val proxyTypes = listOf("HTTP", "SOCKS5")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,6 +56,17 @@ fun ProxySettingsScreen(
         port = settings.proxyPort.first().toString()
         username = settings.proxyUsername.first()
         password = settings.proxyPassword.first()
+    }
+
+    /** 地址格式校验：代理地址只填主机名或 IP，协议前缀与端口各有专门的地方 */
+    fun hostErrorOf(raw: String): String? {
+        val clean = raw.trim()
+        return when {
+            clean.isBlank() -> "请先填写代理地址"
+            clean.contains("://") -> "代理地址只填主机名或 IP，不要带协议前缀"
+            clean.contains(":") -> "端口请填在端口框里，地址中不要带冒号"
+            else -> null
+        }
     }
 
     Scaffold(
@@ -89,13 +105,21 @@ fun ProxySettingsScreen(
                 )
             }
 
-            OutlinedTextField(
-                value = type,
-                onValueChange = { type = it },
-                label = { Text("代理类型") },
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("代理类型", style = MaterialTheme.typography.bodyLarge)
+                Spacer(Modifier.width(12.dp))
+                proxyTypes.forEach { value ->
+                    FilterChip(
+                        selected = type == value,
+                        onClick = { type = value },
+                        label = { Text(value) }
+                    )
+                }
+            }
 
             OutlinedTextField(
                 value = host,
@@ -127,7 +151,9 @@ fun ProxySettingsScreen(
                 onValueChange = { password = it },
                 label = { Text("密码（可选）") },
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
             )
 
             when (testState) {
@@ -149,10 +175,11 @@ fun ProxySettingsScreen(
             ) {
                 OutlinedButton(
                     onClick = {
+                        val hostError = hostErrorOf(host)
                         val portNum = port.toIntOrNull()?.takeIf { it in 1..65535 }
                         when {
-                            host.isBlank() -> {
-                                testResult = "请先填写代理地址"
+                            hostError != null -> {
+                                testResult = hostError
                                 testState = TestState.Failed
                             }
                             portNum == null -> {
@@ -163,10 +190,9 @@ fun ProxySettingsScreen(
                                 scope.launch {
                                     testState = TestState.Testing
                                     try {
-                                        // 隔离测试：不改动全局代理配置。原先点"测试连接"
-                                        // 会直接 updateProxy 把整个应用切到待测代理，
-                                        // 且不落盘 DataStore，造成内存态与设置不一致
-                                        latency = app.api.testProxyConnection(type, host, portNum, username, password)
+                                        // 隔离测试：不改动全局代理配置。探活用的是自备 Dispatcher/
+                                        // ConnectionPool 的一次性客户端，不会碰到全局连接池
+                                        latency = app.api.testProxyConnection(type, host.trim(), portNum, username.trim(), password)
                                         testState = TestState.Success
                                     } catch (e: Exception) {
                                         testResult = e.message ?: "未知错误"
@@ -184,25 +210,36 @@ fun ProxySettingsScreen(
 
                 Button(
                     onClick = {
-                        // 保存前校验端口：原先静默回落 7890，用户填错端口也毫无提示
+                        // 保存前校验端口，并校验地址：原先只查端口，地址留空也能「保存成功」，
+                        // 但代理此时根本没生效（buildProxyConfig 遇空地址直接返回 null），
+                        // 界面开关是开的、请求却还是直连
                         val portNum = port.toIntOrNull()?.takeIf { it in 1..65535 }
-                        if (portNum == null) {
-                            testResult = "端口无效（需 1-65535）"
-                            testState = TestState.Failed
-                        } else {
-                            scope.launch {
-                                // NonCancellable：保存后立刻退出页面也不会中断写入，
-                                // 否则部分字段没落盘（输入看似丢失）且代理未生效
-                                withContext(NonCancellable) {
-                                    settings.saveProxyEnabled(enabled)
-                                    settings.saveProxyType(type)
-                                    settings.saveProxyHost(host)
-                                    settings.saveProxyPort(portNum)
-                                    settings.saveProxyUsername(username)
-                                    settings.saveProxyPassword(password)
-                                    app.api.updateProxy(enabled, type, host, portNum, username, password)
+                        val cleanHost = host.trim()
+                        val hostError = if (enabled) hostErrorOf(cleanHost) else null
+                        when {
+                            hostError != null -> {
+                                testResult = hostError
+                                testState = TestState.Failed
+                            }
+                            portNum == null -> {
+                                testResult = "端口无效（需 1-65535）"
+                                testState = TestState.Failed
+                            }
+                            else -> {
+                                scope.launch {
+                                    // NonCancellable：保存后立刻退出页面也不会中断写入，
+                                    // 否则部分字段没落盘（输入看似丢失）且代理未生效
+                                    withContext(NonCancellable) {
+                                        settings.saveProxyEnabled(enabled)
+                                        settings.saveProxyType(type)
+                                        settings.saveProxyHost(cleanHost)
+                                        settings.saveProxyPort(portNum)
+                                        settings.saveProxyUsername(username.trim())
+                                        settings.saveProxyPassword(password)
+                                        app.api.updateProxy(enabled, type, cleanHost, portNum, username.trim(), password)
+                                    }
+                                    Toast.makeText(context, "代理配置已保存", Toast.LENGTH_SHORT).show()
                                 }
-                                Toast.makeText(context, "代理配置已保存", Toast.LENGTH_SHORT).show()
                             }
                         }
                     },

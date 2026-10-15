@@ -193,6 +193,8 @@ fun BangumiLoginPanel(onLoginSuccess: (User) -> Unit) {
                             }
                         }
                         app.settings.saveUsername(user.username)
+                        // 换了账号：进程级缓存（详情页收藏状态/评分、标签索引可见性）整体作废
+                        app.api.bumpSessionGeneration()
                         onLoginSuccess(user)
                     } catch (e: CancellationException) {
                         throw e
@@ -201,6 +203,10 @@ fun BangumiLoginPanel(onLoginSuccess: (User) -> Unit) {
                         app.api.updateToken(prevToken)
                         app.api.refreshToken = prevRefresh.takeIf { it.isNotBlank() }
                         if (mode == 1) {
+                            // 直接登录时网页 Cookie 已被换成新账号的：只回滚 token 会留下
+                            // 「API 是旧账号、网页是新账号」的混合身份，宁可清掉网页会话重登
+                            app.api.clearWebSession()
+                            app.api.bumpSessionGeneration()
                             // 验证码是一次性的，无论失败在哪一步都刷新，否则重试必再失败
                             captchaKey++
                         }

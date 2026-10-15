@@ -29,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
@@ -36,6 +37,7 @@ import com.bangumi.ywylite.data.model.PagedUserCollection
 import com.bangumi.ywylite.data.model.UserCollection
 import com.bangumi.ywylite.ui.component.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /** 加载更多 footer：列表与瀑布流两种容器共用 */
@@ -122,26 +124,67 @@ fun CollectionScreen(
     val waterfall by app.settings.collectionWaterfall.collectAsState(initial = false)
     val listState = rememberLazyListState()
     val gridState = rememberLazyStaggeredGridState()
+    // 切换筛选时的内容过渡（滑出旧内容 → 换筛选 → 从另一侧滑入）
+    val filterTransition = rememberFilterTransition()
+    var switchJob by remember { mutableStateOf<Job?>(null) }
+    // 横滑序列：全部 → 看过 → 想看。其余状态（在看/搁置/抛弃）不在序列里，
+    // 由它们起滑时按标签顺序取方向上相邻的序列项，越界就原地不动
     val swipeCollectionTypes = listOf<Int?>(null, 2, 1)
+    fun swipeTarget(from: Int?, forward: Boolean): Int? {
+        val fromIndex = collectionTypes.indexOfFirst { it.first == from }
+        val cycleIndex = swipeCollectionTypes.indexOf(from)
+        if (cycleIndex >= 0) {
+            return swipeCollectionTypes[(cycleIndex + if (forward) 1 else -1).coerceIn(0, swipeCollectionTypes.lastIndex)]
+        }
+        val candidates = swipeCollectionTypes.filter { target ->
+            val index = collectionTypes.indexOfFirst { it.first == target }
+            if (forward) index > fromIndex else index < fromIndex
+        }
+        return if (forward) candidates.firstOrNull() else candidates.lastOrNull()
+    }
+    // 切换中的目标筛选：过渡还没走完时 uiState 仍是旧筛选，
+    // 下一次滑动要相对「正在切过去的那一屏」算方向，否则中间那次滑动会被当成原地不动丢掉
+    var pendingFilter by remember { mutableStateOf<Pair<Int?, Int?>?>(null) }
     fun selectCollectionType(type: Int?) {
-        scope.launch {
-            if (waterfall) gridState.scrollToItem(0) else listState.scrollToItem(0)
-            uiState = uiState.copy(selectedType = type)
+        val from = pendingFilter ?: (uiState.selectedType to uiState.selectedSubjectType)
+        if (type == from.first) return
+        // 方向按 tab 顺序算：目标位次在更后面 = 向左切换（与左滑同一个方向）
+        val forward = collectionTypes.indexOfFirst { it.first == type } >
+            collectionTypes.indexOfFirst { it.first == from.first }
+        pendingFilter = type to from.second
+        switchJob?.cancel()
+        switchJob = scope.launch {
+            filterTransition.run(forward) {
+                if (waterfall) gridState.scrollToItem(0) else listState.scrollToItem(0)
+                uiState = uiState.copy(selectedType = type)
+            }
+            if (pendingFilter == (type to from.second)) pendingFilter = null
         }
     }
-    val collectionSwipeModifier = Modifier.pointerInput(uiState.selectedType, waterfall) {
+    fun selectSubjectType(type: Int?) {
+        val from = pendingFilter ?: (uiState.selectedType to uiState.selectedSubjectType)
+        if (type == from.second) return
+        val forward = subjectTypeFilters.indexOfFirst { it.first == type } >
+            subjectTypeFilters.indexOfFirst { it.first == from.second }
+        pendingFilter = from.first to type
+        switchJob?.cancel()
+        switchJob = scope.launch {
+            filterTransition.run(forward) {
+                if (waterfall) gridState.scrollToItem(0) else listState.scrollToItem(0)
+                uiState = uiState.copy(selectedSubjectType = type)
+            }
+            if (pendingFilter == (from.first to type)) pendingFilter = null
+        }
+    }
+    // 阈值按 dp 换算：裸像素在不同密度屏上手感差一倍
+    val swipeThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
+    val collectionSwipeModifier = Modifier.pointerInput(uiState.selectedType, waterfall, swipeThresholdPx) {
         var dragDistance = 0f
         detectHorizontalDragGestures(
             onHorizontalDrag = { _, amount -> dragDistance += amount },
             onDragEnd = {
-                if (kotlin.math.abs(dragDistance) >= 72f) {
-                    val currentIndex = swipeCollectionTypes.indexOf(uiState.selectedType)
-                    val targetIndex = if (currentIndex >= 0) {
-                        currentIndex + if (dragDistance < 0f) 1 else -1
-                    } else {
-                        swipeCollectionTypes.indexOf(2)
-                    }.coerceIn(0, swipeCollectionTypes.lastIndex)
-                    val targetType = swipeCollectionTypes[targetIndex]
+                if (kotlin.math.abs(dragDistance) >= swipeThresholdPx) {
+                    val targetType = swipeTarget(uiState.selectedType, forward = dragDistance < 0f)
                     if (targetType != uiState.selectedType) selectCollectionType(targetType)
                 }
                 dragDistance = 0f
@@ -163,14 +206,23 @@ fun CollectionScreen(
     val refresh: () -> Unit = {
         scope.launch {
             val u = username ?: return@launch
+            // 记下发起时的筛选：刷新期间用户切了筛选，这份响应就属于旧筛选，不能再写回
+            val filterType = uiState.selectedType
+            val filterSubjectType = uiState.selectedSubjectType
+            fun filterChanged() = filterType != uiState.selectedType || filterSubjectType != uiState.selectedSubjectType
             uiState = uiState.copy(refreshing = true)
             try {
                 val result = app.api.getUserCollections(
                     u,
-                    subjectType = uiState.selectedSubjectType,
-                    collectionType = uiState.selectedType,
+                    subjectType = filterSubjectType,
+                    collectionType = filterType,
                     offset = 0
                 )
+                if (filterChanged()) {
+                    // 新筛选的首拉正在进行（会自己覆盖列表）：丢弃过期响应，只把转圈停掉
+                    uiState = uiState.copy(refreshing = false)
+                    return@launch
+                }
                 uiState = uiState.copy(
                     refreshing = false,
                     data = result.data.distinctBy { it.subjectId },
@@ -183,7 +235,9 @@ fun CollectionScreen(
                 throw e
             } catch (_: Exception) {
                 uiState = uiState.copy(refreshing = false)
-                Toast.makeText(context, "刷新失败", Toast.LENGTH_SHORT).show()
+                if (!filterChanged()) {
+                    Toast.makeText(context, "刷新失败", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -204,7 +258,10 @@ fun CollectionScreen(
             if (restored == username) return@LaunchedEffect
         }
         val currentUsername = username!!
-        uiState = uiState.copy(loading = true, offset = 0, error = null, loadMoreError = false)
+        // hasMore 必须一并清掉：否则列表被换成加载屏时 layoutInfo 为空，
+        // nearEnd 会误判成「到底」，与这次首拉并发再取一遍 offset=0，
+        // 之后 offset 多加一页 → 中间整页条目被跳过
+        uiState = uiState.copy(loading = true, offset = 0, hasMore = false, error = null, loadMoreError = false)
         try {
             val result = app.api.getUserCollections(
                 currentUsername,
@@ -242,12 +299,12 @@ fun CollectionScreen(
                 lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
                 totalCount = info.totalItemsCount
             }
-            uiState.hasMore && !uiState.loadMoreError &&
+            uiState.hasMore && !uiState.loadMoreError && !uiState.loading && !uiState.refreshing &&
                 lastVisible >= totalCount - 4
         }
     }
     LaunchedEffect(nearEnd, uiState.offset, uiState.loadMoreKey) {
-        if (!nearEnd || username == null) return@LaunchedEffect
+        if (!nearEnd || username == null || uiState.loading || uiState.refreshing) return@LaunchedEffect
         try {
             val result = app.api.getUserCollections(
                 username!!,
@@ -340,7 +397,7 @@ fun CollectionScreen(
                         subjectTypeFilters.forEach { (type, label) ->
                             FilterChip(
                                 selected = uiState.selectedSubjectType == type,
-                                onClick = { uiState = uiState.copy(selectedSubjectType = type) },
+                                onClick = { selectSubjectType(type) },
                                 label = { Text(label) }
                             )
                         }
@@ -350,7 +407,10 @@ fun CollectionScreen(
                 PullToRefreshBox(
                     isRefreshing = uiState.refreshing,
                     onRefresh = refresh,
-                    modifier = Modifier.fillMaxSize().then(collectionSwipeModifier)
+                    // 过渡挂在内容区上（tab 与二级筛选行留在原地不跟着动）
+                    modifier = Modifier.fillMaxSize()
+                        .then(collectionSwipeModifier)
+                        .then(filterTransition.modifier)
                 ) {
                 when {
                     uiState.loading -> LoadingView()
@@ -407,7 +467,8 @@ fun CollectionScreen(
                             contentPadding = PaddingValues(vertical = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            items(uiState.data, key = { it.subjectId }) { item ->
+                            // 翻页数据可能重叠，去重后再交给列表（重复 key 会崩溃）
+                            items(uiState.data.distinctBy { it.subjectId }, key = { it.subjectId }) { item ->
                                 item.subject?.let { subject ->
                                     Column {
                                         val cardShape = RoundedCornerShape(18.dp)

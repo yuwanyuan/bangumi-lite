@@ -91,9 +91,12 @@ private fun timelineStateStyle(kind: String): TimelineStateStyle = when (kind) {
     else -> TimelineStateStyle(MaterialTheme.colorScheme.outline, Color.White)
 }
 
+/** 表头 2026-10-9 的解析式：提到文件级，避免每次重组都重新编译（日期表头是吸顶项，滚动时反复执行） */
+private val TIMELINE_DATE_REGEX = Regex("""(\d{4})-(\d{1,2})-(\d{1,2})""")
+
 /** 网页表头 2026-10-9 → 10月9日（不是今年才带上年份） */
 private fun formatTimelineDate(label: String): String {
-    val match = Regex("""(\d{4})-(\d{1,2})-(\d{1,2})""").find(label) ?: return label
+    val match = TIMELINE_DATE_REGEX.find(label) ?: return label
     val year = match.groupValues[1].toIntOrNull() ?: return label
     val month = match.groupValues[2].toIntOrNull() ?: return label
     val day = match.groupValues[3].toIntOrNull() ?: return label
@@ -116,7 +119,8 @@ fun ProfileScreen(
     val app = App.INSTANCE
     val scope = rememberCoroutineScope()
     val timelineSnackbar = remember { SnackbarHostState() }
-    var uiState by remember { mutableStateOf(ProfileUiState()) }
+    // loading 初值 true：登录态来自 DataStore，首帧还没读到，先转圈而不是闪一下登录表单
+    var uiState by remember { mutableStateOf(ProfileUiState(loading = true)) }
     var token by remember { mutableStateOf<String?>(null) }
     // 持久化设置是唯一数据源：本地再存一份镜像会跟 DataStore 的首次/后续发射打架，
     // 出现「点开了又自己收起」
@@ -170,7 +174,8 @@ fun ProfileScreen(
                 uiState = uiState.copy(loading = false, error = e.message)
             }
         } else {
-            uiState = uiState.copy(isLoggedIn = false, user = null, loading = false, error = null)
+            // 登出/未登录：整个状态复位——只清 user 会把上一个账号的时间线留在界面上
+            uiState = ProfileUiState()
         }
     }
 
@@ -186,6 +191,9 @@ fun ProfileScreen(
                     timelinePage = 1,
                     timelineHasMore = timeline.isNotEmpty()
                 )
+            } catch (e: CancellationException) {
+                // 取消（切账号）必须向上传播：吞掉会把 "Job was cancelled" 当成时间线错误写进界面
+                throw e
             } catch (e: Exception) {
                 uiState = uiState.copy(timelineLoading = false, timelineError = e.message)
             }
@@ -209,7 +217,10 @@ fun ProfileScreen(
             )
         }
     ) { padding ->
-        if (!uiState.isLoggedIn) {
+        if (uiState.loading && uiState.user == null) {
+            // 首帧还没读到 DataStore 里的登录态：转圈，别闪登录表单
+            LoadingView(Modifier.padding(padding))
+        } else if (!uiState.isLoggedIn) {
             LoginContent(
                 modifier = Modifier.padding(padding).fillMaxSize(),
                 onLoginSuccess = { user ->

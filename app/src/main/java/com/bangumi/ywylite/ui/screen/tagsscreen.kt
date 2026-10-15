@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.api.BangumiApi
 import com.bangumi.ywylite.data.model.TagInfo
 import com.bangumi.ywylite.ui.component.ErrorView
@@ -65,6 +66,21 @@ private val tagsCache = mutableMapOf<String, TagIndexCache>()
 /** 标签真实条目数缓存：key = "typePath|标签名"。索引页给的数字是标注人数，不能直接展示 */
 private val tagSubjectCountCache = mutableMapOf<String, Int>()
 
+/** 条目数缓存的条数上限：动画索引 2000+ 页，一直往下翻不能让它无限长 */
+private const val TAG_COUNT_CACHE_LIMIT = 3000
+
+/** 缓存归属的会话代号：R18 条目只对登录会话下发，登录/登出后索引内容会变，缓存必须整体作废 */
+private var tagsCacheGeneration = -1
+
+private fun ensureTagsCache() {
+    val generation = App.INSTANCE.api.sessionGeneration
+    if (tagsCacheGeneration != generation) {
+        tagsCache.clear()
+        tagSubjectCountCache.clear()
+        tagsCacheGeneration = generation
+    }
+}
+
 private val tagsSubjectTypes = listOf(
     2 to "动画",
     1 to "书籍",
@@ -89,11 +105,16 @@ fun TagsScreen(
     onBack: () -> Unit,
     onNavigateToTagBrowse: (String, String, Int) -> Unit
 ) {
-    var uiState by remember { mutableStateOf(TagsUiState()) }
+    // 入参决定首屏看哪一类：浏览页切到「游戏」再进标签页，打开的应该是游戏标签索引
+    val initialType = remember(typePath) {
+        tagsTypePaths.entries.firstOrNull { it.value == typePath }?.key ?: 2
+    }
+    var uiState by remember { mutableStateOf(TagsUiState(selectedType = initialType)) }
     val gridState = rememberLazyGridState()
 
     // 首次加载 / 切类型 / 重试：有缓存直接展示，没有则取索引第 1 页
     LaunchedEffect(uiState.selectedType, uiState.retryKey) {
+        ensureTagsCache()
         val path = tagsTypePaths[uiState.selectedType] ?: "anime"
         val cached = tagsCache[path]
         if (cached != null) {
@@ -170,9 +191,12 @@ fun TagsScreen(
     // 标签真实条目数「滚动到哪补到哪」：只为可见标签发请求（每个标签 1~2 个网页请求），
     // 结果进 tagSubjectCountCache——翻回来或重进页面都不再重复请求
     LaunchedEffect(uiState.selectedType, uiState.retryKey) {
+        ensureTagsCache()
         val type = uiState.selectedType
         val path = tagsTypePaths[type] ?: "anime"
         val requested = mutableSetOf<String>()
+        // 失败过的标签允许再试一次：否则网络抖一下，那几个标签的条目数会永久停在「…」
+        val retried = mutableSetOf<String>()
         snapshotFlow { gridState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String } }
             .collect { names ->
                 val pending = names.filter { it !in requested && tagSubjectCountCache["$path|$it"] == null }
@@ -182,7 +206,12 @@ fun TagsScreen(
                     batch.map { name -> async { name to api.getTagSubjectCount(type, name) } }
                         .awaitAll()
                         .forEach { (name, count) ->
-                            if (count != null) tagSubjectCountCache["$path|$name"] = count
+                            if (count != null) {
+                                if (tagSubjectCountCache.size >= TAG_COUNT_CACHE_LIMIT) tagSubjectCountCache.clear()
+                                tagSubjectCountCache["$path|$name"] = count
+                            } else if (retried.add(name)) {
+                                requested.remove(name)
+                            }
                         }
                     if (uiState.selectedType == type) {
                         uiState = uiState.copy(

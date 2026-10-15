@@ -287,12 +287,11 @@ private fun BangumiAppContent(baseDensity: Density) {
                     navArgument("type") { type = NavType.IntType }
                 )
             ) { backStackEntry ->
-                val tagName = backStackEntry.arguments?.getString("tagName")?.let {
-                    java.net.URLDecoder.decode(it, "UTF-8")
-                } ?: ""
-                val tagSlug = backStackEntry.arguments?.getString("tagSlug")?.let {
-                    java.net.URLDecoder.decode(it, "UTF-8")
-                } ?: ""
+                // 取参时 Navigation 已经做过百分号解码（内部走 Uri.getQueryParameters），
+                // 这里不能再解一次：含 '%' 的标签会抛 IllegalArgumentException 崩溃，
+                // 含 '+' 的标签会被解成空格后请求到错误的标签
+                val tagName = backStackEntry.arguments?.getString("tagName") ?: ""
+                val tagSlug = backStackEntry.arguments?.getString("tagSlug") ?: ""
                 val type = backStackEntry.arguments?.getInt("type") ?: 2
                 // 标签浏览页与标签页同属标签流，同样豁免字体缩放
                 CompositionLocalProvider(LocalDensity provides baseDensity) {

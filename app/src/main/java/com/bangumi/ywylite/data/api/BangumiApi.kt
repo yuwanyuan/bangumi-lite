@@ -66,6 +66,18 @@ class BangumiApi(private val context: Context) {
     /** 直接登录保存的 refresh_token，供 access_token 过期后自动续期 */
     var refreshToken: String? = null
 
+    /**
+     * 会话代号：登录/登出时 +1。UI 层的进程级缓存（详情页、标签索引）据此判断自己缓存的
+     * 是不是当前账号的数据——缓存里含收藏状态、评分、吐槽、观看进度，换号后必须整体作废。
+     */
+    @Volatile
+    var sessionGeneration: Int = 0
+        private set
+
+    fun bumpSessionGeneration() {
+        sessionGeneration++
+    }
+
     /** 触发 401 的请求所携带的失效 token（用于去重并发续期） */
     var onTokenInvalid: ((String?) -> Unit)? = null
 
@@ -179,6 +191,20 @@ class BangumiApi(private val context: Context) {
     val hasWebSession: Boolean
         get() = webCookieStore.values.any { it.name == "chii_auth" && it.value.isNotBlank() }
 
+    /**
+     * 网页抓取接口的服务端失败检查。
+     *
+     * webClient 的 expectSuccess = false：5xx/429 的错误页会被解析成「0 条数据」，
+     * 界面于是显示成「暂无条目 / 还没有评论」，分页还会被当成末页直接关掉。
+     * 只有 4xx 不抛——标签不存在、条目已删这类情况交给调用方给空状态文案
+     * （标签浏览页要借此区分「R18 未登录被扣掉」）。
+     */
+    private fun HttpResponse.requireWebPageOk() {
+        if (status.value >= 500 || status.value == 429) {
+            throw IllegalStateException("bgm.tv 返回 HTTP ${status.value}，请稍后重试")
+        }
+    }
+
     // 官方 API 与 Web 端域名，可由设置切换（见 updateApiHost）
     private var apiBaseUrl = "https://api.bgm.tv"
     private var webBaseUrl = "https://bgm.tv"
@@ -262,11 +288,7 @@ class BangumiApi(private val context: Context) {
 
     private fun buildProxyConfig(): ProxyConfig? {
         if (!currentProxyEnabled || currentProxyHost.isEmpty()) return null
-        val proxyType = when (currentProxyType.uppercase()) {
-            "SOCKS" -> java.net.Proxy.Type.SOCKS
-            else -> java.net.Proxy.Type.HTTP
-        }
-        val proxy = Proxy(proxyType, InetSocketAddress(currentProxyHost, currentProxyPort))
+        val proxy = Proxy(proxyTypeOf(currentProxyType), InetSocketAddress(currentProxyHost, currentProxyPort))
         val authenticator = if (currentProxyUsername.isNotEmpty()) {
             ProxyAuthenticator(currentProxyUsername, currentProxyPassword)
         } else null
@@ -318,6 +340,14 @@ class BangumiApi(private val context: Context) {
     }
 
     /**
+     * 清空 OkHttp 磁盘缓存。缓存设置页必须走这里而不是删目录：
+     * 运行中的 Cache 实例持有同一个目录，从文件系统底下抽走会让它写坏日志。
+     */
+    fun clearNetworkCache() {
+        baseOkHttp.cache?.evictAll()
+    }
+
+    /**
      * 连通性测试：向目标域名发一个短超时 GET，服务端有任何 HTTP 响应（含 4xx）即视为通。
      * 用于设置页 API / Web 地址的绿/红状态显示。
      */
@@ -352,9 +382,11 @@ class BangumiApi(private val context: Context) {
             ?: throw IllegalStateException("登录页解析失败，请稍后重试")
     }
 
-    /** 登录验证码图片 */
+    /** 登录验证码图片（带时间戳绕开缓存） */
     suspend fun getWebLoginCaptcha(): ByteArray {
-        return webClient.get("/signup/captcha?${System.currentTimeMillis()}1").body()
+        return webClient.get("/signup/captcha") {
+            url { parameters.append("t", System.currentTimeMillis().toString()) }
+        }.body()
     }
 
     /** 直接登录：邮箱 + 密码 + 验证码 → OAuth Token */
@@ -527,13 +559,14 @@ class BangumiApi(private val context: Context) {
      * 查看器的「详情」面板需要网页版全量数据。
      */
     suspend fun getSubjectWebInfobox(subjectId: Int): List<InfoboxItem> {
-        val html = webClient.get("/subject/${subjectId}") {
+        val response = webClient.get("/subject/${subjectId}") {
             headers {
                 append(HttpHeaders.UserAgent, "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 ywylite")
                 append(FORCE_NETWORK_HEADER, "1")
             }
-        }.bodyAsText()
-        return parseInfoboxHtml(html)
+        }
+        response.requireWebPageOk()
+        return parseInfoboxHtml(response.bodyAsText())
     }
 
     /** 解析条目页 <ul id="infobox">；infobox 内含嵌套 ul（多值字段），用配对计数定位边界 */
@@ -841,6 +874,7 @@ class BangumiApi(private val context: Context) {
     /** 章节页（bgm.tv/ep/{id}）吐槽箱评论，HTML 解析，只取主楼 */
     suspend fun getEpisodeComments(episodeId: Int): List<EpisodeComment> {
         val response = webClient.get("/ep/${episodeId}")
+        response.requireWebPageOk()
         return parseEpisodeCommentsFromHtml(response.bodyAsText())
     }
 
@@ -899,13 +933,16 @@ class BangumiApi(private val context: Context) {
         page: Int = 1
     ): TagBrowsePage {
         val typePath = typePaths[type] ?: "anime"
-        val encodedTag = java.net.URLEncoder.encode(tag, "UTF-8")
+        // 路径段按 RFC 3986 编码：URLEncoder 会把空格编成 '+'，而路径里的 '+' 是字面加号，
+        // 带空格的标签（如 Fate Zero）会因此请求到不存在的标签
+        val encodedTag = android.net.Uri.encode(tag)
         val response = webClient.get("/${typePath}/tag/${encodedTag}") {
             url {
                 if (sort.isNotEmpty()) parameters.append("sort", sort)
                 parameters.append("page", page.coerceAtLeast(1).toString())
             }
         }
+        response.requireWebPageOk()
         return parseSubjectsFromHtml(response.bodyAsText(), page)
     }
 
@@ -985,6 +1022,7 @@ class BangumiApi(private val context: Context) {
                 parameters.append("page", page.toString())
             }
         }
+        response.requireWebPageOk()
         return fillTimelineSubjects(parseTimelineFromHtml(response.bodyAsText()))
     }
 
@@ -1357,6 +1395,7 @@ class BangumiApi(private val context: Context) {
         val response = webClient.get("/${typePath}/tag") {
             url { parameters.append("page", page.coerceAtLeast(1).toString()) }
         }
+        response.requireWebPageOk()
         val html = response.bodyAsText()
         return TagIndexPage(
             tags = parseTagsFromHtml(html),
@@ -1411,11 +1450,15 @@ class BangumiApi(private val context: Context) {
     suspend fun testProxyConnection(type: String, host: String, port: Int, username: String, password: String): Long =
         withContext(Dispatchers.IO) {
             if (host.isBlank()) throw IllegalStateException("请先填写代理地址")
-            val proxyType = when (type.uppercase()) {
-                "SOCKS" -> Proxy.Type.SOCKS
-                else -> Proxy.Type.HTTP
-            }
+            val proxyType = proxyTypeOf(type)
+            // 探活客户端必须自备 Dispatcher 与 ConnectionPool：newBuilder() 派生出的客户端
+            // 与基座是**按引用**共享这两个对象的，而 Dispatcher 的 executorService 一旦
+            // shutdown 就永不重建，关掉它等于关掉全 App（含 4 个 Ktor 客户端）的请求能力。
+            val probeDispatcher = okhttp3.Dispatcher()
+            val probeConnectionPool = okhttp3.ConnectionPool()
             val testClient = baseOkHttp.newBuilder()
+                .dispatcher(probeDispatcher)
+                .connectionPool(probeConnectionPool)
                 .proxy(Proxy(proxyType, InetSocketAddress(host, port)))
                 .connectTimeout(8, TimeUnit.SECONDS)
                 .readTimeout(8, TimeUnit.SECONDS)
@@ -1427,18 +1470,29 @@ class BangumiApi(private val context: Context) {
                 .build()
             val start = System.currentTimeMillis()
             try {
-                testClient.newCall(Request.Builder().url("${apiBaseUrl}/calendar").build()).execute().use { response ->
+                // 带 FORCE_NETWORK：基座带 20MB 磁盘缓存，api.bgm.tv 的响应是 max-age=3600，
+                // 否则代理地址填错也可能拿缓存里的 /calendar 判定「连接成功」
+                testClient.newCall(
+                    Request.Builder()
+                        .url("${apiBaseUrl}/calendar")
+                        .header(FORCE_NETWORK_HEADER, "1")
+                        .build()
+                ).execute().use { response ->
                     if (!response.isSuccessful) {
                         throw IllegalStateException("代理返回 HTTP ${response.code}")
                     }
                 }
             } finally {
-                // 缓存与基座共享不能关，只释放本客户端的连接资源
-                testClient.connectionPool.evictAll()
-                testClient.dispatcher.executorService.shutdown()
+                // 只释放本次探活自己的连接资源
+                probeConnectionPool.evictAll()
+                probeDispatcher.executorService.shutdown()
             }
             System.currentTimeMillis() - start
         }
+
+    /** 代理类型归一：HTTP / SOCKS / socks5 等写法都收，只有明确以 SOCKS 开头的才走 SOCKS */
+    private fun proxyTypeOf(type: String): Proxy.Type =
+        if (type.trim().uppercase().startsWith("SOCKS")) Proxy.Type.SOCKS else Proxy.Type.HTTP
 }
 
 private class ProxyAuthenticator(
