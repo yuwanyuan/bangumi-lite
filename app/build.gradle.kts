@@ -15,12 +15,15 @@ android {
         applicationId = "com.bangumi.ywylite"
         minSdk = 26
         targetSdk = 36
-        // CI 约定：GITHUB_RUN_NUMBER 保证 versionCode 单调递增；tag 构建（v*）额外注入
-        // APP_VERSION_NAME 作为正式版本号，master 构建回落为 <base>-dev.<run>
+        // CI 约定：GITHUB_RUN_NUMBER 保证 versionCode 全局单调递增（回跳会被 Android 拒装）；
+        // tag 构建（v*）额外注入 APP_VERSION_NAME 作为正式版本号，master 构建回落为
+        // <base>-dev.N，N 由 workflow 按「距上一个 v* 标签的提交数」注入，故每次发完
+        // 正式版后测试版序号自动从 1 重新开始。
         val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
         val tagVersion = System.getenv("APP_VERSION_NAME")?.takeIf { it.isNotBlank() }?.removePrefix("v")
+        val devBuild = System.getenv("APP_DEV_BUILD")?.toIntOrNull() ?: 1
         versionCode = runNumber ?: 2
-        versionName = tagVersion ?: "1.2.2-dev.${runNumber ?: 1}"
+        versionName = tagVersion ?: "1.2.2-dev.$devBuild"
     }
 
     signingConfigs {

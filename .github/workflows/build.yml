@@ -35,6 +35,10 @@ jobs:
           sleep "${seconds}"
 
       - uses: actions/checkout@v4
+        with:
+          # 全量拉取：master 构建要用「距上一个 v* 标签的提交数」算 dev 序号，
+          # 默认的浅克隆拿不到标签，会算不出来。
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -55,6 +59,24 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew assembleDebug
 
+      - name: Dev Build Counter
+        id: devbuild
+        if: github.ref == 'refs/heads/master'
+        shell: bash
+        run: |
+          # 测试版序号 = 距上一个 v* 标签的提交数，所以每次打完正式标签 push master
+          # 后会自动从 dev.1 重新开始。只用于 versionName；versionCode 仍取全局
+          # GITHUB_RUN_NUMBER，避免回跳导致 Android 拒绝安装。
+          tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -z "$tag" ]; then
+            n=1
+          else
+            n="$(git rev-list "${tag}..HEAD" --count)"
+            [ "$n" -gt 0 ] || n=1
+          fi
+          echo "build=$n" >> "$GITHUB_OUTPUT"
+          echo "距 ${tag:-（无标签）} 共 ${n} 个提交 → dev.${n}"
+
       - name: Build Release APK
         env:
           KEYSTORE_FILE: bgmlite.jks
@@ -62,6 +84,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           APP_VERSION_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          APP_DEV_BUILD: ${{ steps.devbuild.outputs.build }}
         run: ./gradlew assembleRelease
 
       - name: Upload Debug APK
@@ -86,6 +109,8 @@ jobs:
           overwrite_files: true
           body: |
             master 分支自动构建的开发版，覆盖式更新（tag 位置不代表构建内容）。
+
+            versionName 里的 -dev.N 是距上一个 v* 标签的提交数，每次打完正式标签后从 dev.1 重新计。
 
             连续 push 会合并：master 上最后一次 push 之后静默 MASTER_DEBOUNCE_SECONDS 秒才出包，
             所以这里的构建可能比 master 最新提交晚几分钟，正常现象。
