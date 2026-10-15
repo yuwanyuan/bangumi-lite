@@ -341,6 +341,8 @@ data class TimelineItem(
     val subjectNameCn: String = "",
     val subjectImage: String = "",
     val episodeUrl: String = "",
+    /** 章节链接中的 Bangumi episode ID；即使父条目 ID 暂时解析失败，点击时也可重试解析 */
+    val episodeId: Int = 0,
     val episodeInfo: String = "",
     val description: String = "",
     val time: String = "",
@@ -385,6 +387,8 @@ data class TimelineItem(
 data class TimelineEntry(
     val items: List<TimelineItem>,
     val subjectId: Int,
+    /** 回跳所属作品所需的章节 ID，通常由行内某条原始动态提供 */
+    val episodeId: Int,
     val subjectNameCn: String,
     val subjectName: String,
     val subjectImage: String,

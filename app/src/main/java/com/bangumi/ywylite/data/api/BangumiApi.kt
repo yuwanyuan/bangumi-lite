@@ -1046,7 +1046,7 @@ class BangumiApi(private val context: Context) {
     }
 
     /** 章节 → 所属条目 ID（时间线里「看过 ep.N」形态的动态只给了章节链接） */
-    private suspend fun fetchEpisodeSubjectId(episodeId: Int): Int = runCatching {
+    suspend fun fetchEpisodeSubjectId(episodeId: Int): Int = runCatching {
         val body = client.get("/v0/episodes/${episodeId}") { withAuth() }.bodyAsText()
         json.parseToJsonElement(body).jsonObject["subject_id"]
             ?.jsonPrimitive?.content?.toIntOrNull() ?: 0
@@ -1054,15 +1054,18 @@ class BangumiApi(private val context: Context) {
 
     /** 动态正文开头的动词 → 状态分类 + 导轨柱形里写的状态名（文案按网页原文取字） */
     private fun timelineActionOf(desc: String, isEpisode: Boolean): Pair<String, String> = when {
-        Regex("""^(看过|读过|玩过|听过)""").containsMatchIn(desc) ->
-            (if (isEpisode) TimelineItem.STATE_PROGRESS else TimelineItem.STATE_DONE) to desc.take(2)
+        Regex("""^(看过|读过|玩过|听过)""").containsMatchIn(desc) -> {
+            val label = if (isEpisode) "看到" else desc.take(2)
+            (if (isEpisode) TimelineItem.STATE_PROGRESS else TimelineItem.STATE_DONE) to label
+        }
         Regex("""^(在看|在读|在玩|在听)""").containsMatchIn(desc) ->
             TimelineItem.STATE_DOING to desc.take(2)
         Regex("""^(想看|想读|想玩|想听)""").containsMatchIn(desc) ->
             TimelineItem.STATE_WISH to desc.take(2)
         desc.contains("搁置") -> TimelineItem.STATE_ON_HOLD to "搁置"
         desc.contains("抛弃") -> TimelineItem.STATE_DROPPED to "抛弃"
-        Regex("""^(完成|看到)""").containsMatchIn(desc) -> TimelineItem.STATE_PROGRESS to desc.take(2)
+        Regex("""^(完成|看到)""").containsMatchIn(desc) ->
+            TimelineItem.STATE_PROGRESS to if (isEpisode) "看到" else desc.take(2)
         desc.contains("吐槽") -> TimelineItem.STATE_SAY to "吐槽"
         desc.startsWith("加入") -> TimelineItem.STATE_OTHER to "加入"
         desc.contains("改名") -> TimelineItem.STATE_OTHER to "改名"
@@ -1209,7 +1212,8 @@ class BangumiApi(private val context: Context) {
                 .containsMatchIn(block)
 
             // 进度动态（看过 ep.N / 读过 第N话）与收藏动态的动词可能同名，靠章节链接区分
-            val isEpisode = epLink.isNotEmpty() || Regex("""ep\.\d+""").containsMatchIn(desc) ||
+            val isEpisode = epLink.isNotEmpty() || progressInfo != null ||
+                Regex("""ep\.\d+""").containsMatchIn(desc) ||
                 Regex("""第\d+[话卷章]""").containsMatchIn(desc)
             val (stateKind, actionLabel) = timelineActionOf(desc, isEpisode)
             // 一次勾选多个条目时正文结尾是「2 部番组 / 3 本书」这类数量词，列表里作后缀标签
@@ -1234,6 +1238,7 @@ class BangumiApi(private val context: Context) {
                 subjectNameCn = subjectNameCn,
                 subjectImage = image,
                 episodeUrl = epLink,
+                episodeId = Regex("""/subject/ep/(\d+)""").find(epLink)?.groupValues?.get(1)?.toIntOrNull() ?: 0,
                 episodeInfo = episodeDisplay,
                 description = desc,
                 time = time,

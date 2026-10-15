@@ -115,6 +115,7 @@ fun ProfileScreen(
 ) {
     val app = App.INSTANCE
     val scope = rememberCoroutineScope()
+    val timelineSnackbar = remember { SnackbarHostState() }
     var uiState by remember { mutableStateOf(ProfileUiState()) }
     var token by remember { mutableStateOf<String?>(null) }
     // 持久化设置是唯一数据源：本地再存一份镜像会跟 DataStore 的首次/后续发射打架，
@@ -193,6 +194,7 @@ fun ProfileScreen(
 
     Scaffold(
         containerColor = androidx.compose.ui.graphics.Color.Transparent,
+        snackbarHost = { SnackbarHost(timelineSnackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("我的") },
@@ -334,7 +336,20 @@ fun ProfileScreen(
                                     isLast = index == entries.size - 1,
                                     railFraction = railFraction,
                                     onToggleRail = toggleRail,
-                                    onSubjectClick = onSubjectClick
+                                    onSubjectClick = onSubjectClick,
+                                    onEpisodeFallbackClick = { episodeId ->
+                                        scope.launch {
+                                            try {
+                                                val subjectId = app.api.fetchEpisodeSubjectId(episodeId)
+                                                if (subjectId > 0) onSubjectClick(subjectId)
+                                                else timelineSnackbar.showSnackbar("无法找到这条章节记录所属的条目")
+                                            } catch (e: CancellationException) {
+                                                throw e
+                                            } catch (_: Exception) {
+                                                timelineSnackbar.showSnackbar("查询所属条目失败，请检查网络后重试")
+                                            }
+                                        }
+                                    }
                                 )
                             }
                         }
@@ -524,7 +539,8 @@ private fun TimelineEntryRow(
     isLast: Boolean,
     railFraction: Float,
     onToggleRail: () -> Unit,
-    onSubjectClick: (Int) -> Unit
+    onSubjectClick: (Int) -> Unit,
+    onEpisodeFallbackClick: (Int) -> Unit
 ) {
     val darkTheme = isSystemInDarkTheme()
     val titleShape = RoundedCornerShape(6.dp)
@@ -537,7 +553,13 @@ private fun TimelineEntryRow(
         modifier = Modifier
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
-            .then(if (entry.subjectId > 0) Modifier.clickable { onSubjectClick(entry.subjectId) } else Modifier)
+            .then(
+                when {
+                    entry.subjectId > 0 -> Modifier.clickable { onSubjectClick(entry.subjectId) }
+                    entry.episodeId > 0 -> Modifier.clickable { onEpisodeFallbackClick(entry.episodeId) }
+                    else -> Modifier
+                }
+            )
     ) {
         TimelineRailCell(
             fraction = railFraction,

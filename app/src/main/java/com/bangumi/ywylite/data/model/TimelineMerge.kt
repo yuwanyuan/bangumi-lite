@@ -53,7 +53,12 @@ private fun sameBucket(a: TimelineItem, b: TimelineItem): Boolean {
 private fun buildEntry(group: List<TimelineItem>): TimelineEntry {
     val primary = group.first()
     // 收藏状态优先于进度：一次操作里「在看 / 看过」这类收藏状态才是这一行要表达的状态
-    val state = group.firstOrNull { it.stateKind in TimelineItem.COLLECT_STATES } ?: primary
+    val episodeProgress = group.firstOrNull {
+        it.episodeId > 0 && it.stateKind == TimelineItem.STATE_PROGRESS
+    }
+    val state = episodeProgress
+        ?: group.firstOrNull { it.stateKind in TimelineItem.COLLECT_STATES }
+        ?: primary
     val named = group.firstOrNull { it.subjectNameCn.isNotEmpty() }
         ?: group.firstOrNull { it.subjectName.isNotEmpty() }
         ?: primary
@@ -63,6 +68,7 @@ private fun buildEntry(group: List<TimelineItem>): TimelineEntry {
     return TimelineEntry(
         items = group,
         subjectId = group.firstOrNull { it.subjectId > 0 }?.subjectId ?: 0,
+        episodeId = group.firstOrNull { it.episodeId > 0 }?.episodeId ?: 0,
         subjectNameCn = nameCn,
         subjectName = named.subjectName.ifEmpty { nameCn },
         subjectImage = image,
