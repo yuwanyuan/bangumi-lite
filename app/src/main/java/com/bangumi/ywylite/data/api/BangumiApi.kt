@@ -1026,21 +1026,37 @@ class BangumiApi(private val context: Context) {
         return fillTimelineSubjects(parseTimelineFromHtml(response.bodyAsText()))
     }
 
-    /** 时间线补齐用的条目摘要（只取列表要显示的三项） */
-    private data class SubjectBrief(val name: String, val nameCn: String, val cover: String)
+    /** 时间线补齐用的条目摘要（只取列表要显示的三项）；*Fetched 记录接口是否真的返回了对应字段 */
+    private data class SubjectBrief(
+        val name: String,
+        val nameCn: String,
+        val cover: String,
+        val nameFetched: Boolean,
+        val nameCnFetched: Boolean,
+        val coverFetched: Boolean
+    )
 
     /** 翻页会把同一批条目反复送进补齐逻辑，缓存住避免重复请求 */
     private val subjectBriefCache = ConcurrentHashMap<Int, SubjectBrief>()
 
-    private suspend fun fetchSubjectBrief(id: Int): SubjectBrief? {
-        subjectBriefCache[id]?.let { return it }
+    private suspend fun fetchSubjectBrief(id: Int, needCn: Boolean): SubjectBrief? {
+        // 缓存里缺的字段和这次要补齐的字段对不上就再拉一次，避免把空中文名当成「已取到」缓存住
+        subjectBriefCache[id]?.let { cached ->
+            if (cached.nameFetched && cached.coverFetched && (!needCn || cached.nameCnFetched)) return cached
+        }
         return runCatching {
             val subject: Subject = client.get("/v0/subjects/${id}") { withAuth() }.body()
+            val nameCn = subject.nameCn.orEmpty()
+            val cover = subject.images?.large ?: subject.images?.common
+                ?: subject.images?.medium ?: subject.image
             SubjectBrief(
                 name = subject.name,
-                nameCn = subject.nameCn,
-                cover = subject.images?.large ?: subject.images?.common
-                    ?: subject.images?.medium ?: subject.image
+                nameCn = nameCn,
+                cover = cover,
+                // 接口这次真的给出了内容才算取到；译名在接口里本来就可能是空的
+                nameFetched = subject.name.isNotEmpty(),
+                nameCnFetched = nameCn.isNotEmpty(),
+                coverFetched = cover.isNotEmpty()
             ).also { subjectBriefCache[id] = it }
         }.getOrNull()
     }
@@ -1049,8 +1065,8 @@ class BangumiApi(private val context: Context) {
      * 网页里「有条目 ID 但缺封面或标题」的条目用官方接口补齐。
      *
      * 这类条目就是 bgm.tv 按会话把封面卡片扣掉的那些（R18 为主）：网页只剩标题链接，
-     * 封面完全不下发。接口按 token 鉴权，与网页会话无关——详情页能显示的封面这里同样能拿到。
-     * 只对缺字段的条目发请求，字段齐全的条目不受影响。
+     * 封面完全不下发，正文里也只写原名。接口按 token 鉴权，与网页会话无关——
+     * 详情页能显示的封面和中文名这里同样能拿到。只对缺字段的条目发请求。
      */
     private suspend fun fillTimelineSubjects(items: List<TimelineItem>): List<TimelineItem> {
         // 先处理「只有章节链接」的动态（看过 ep.N）：正文里连条目链接都被扣掉了，
@@ -1063,15 +1079,16 @@ class BangumiApi(private val context: Context) {
             if (subjectId > 0) item.copy(subjectId = subjectId) else item
         }
 
-        val needFill = resolved.filter {
+        // 缺中文名也要补：卡片被扣掉的条目网页只留原名，译名只有接口里有
+        val needIds = resolved.filter {
             it.subjectId > 0 &&
-                (it.subjectImage.isEmpty() || (it.subjectNameCn.isEmpty() && it.subjectName.isEmpty()))
-        }
-        if (needFill.isEmpty()) return resolved
+                (it.subjectImage.isEmpty() || it.subjectName.isEmpty() || it.subjectNameCn.isEmpty())
+        }.map { it.subjectId }.distinct()
+        if (needIds.isEmpty()) return resolved
 
-        val briefs = needFill.map { it.subjectId }.distinct()
-            .map { id -> id to fetchSubjectBrief(id) }
-            .toMap()
+        val briefs = needIds.map { id ->
+            id to fetchSubjectBrief(id, needCn = true)
+        }.toMap()
 
         return resolved.map { item ->
             val brief = briefs[item.subjectId] ?: return@map item
@@ -1179,11 +1196,16 @@ class BangumiApi(private val context: Context) {
             val smallName = Regex("""<small\b[^>]*>([\s\S]*?)</small>""", RegexOption.IGNORE_CASE)
                 .find(titleAnchor)?.groupValues?.get(1)?.let { plainText(it) }.orEmpty()
             // 没有封面卡片的动态（条目卡片被服务端扣掉时就是这样），标题只存在于
-            // info_full 里「看过 xxx」那个链接的文本中。排除章节链接：那是「看过 ep.13」形态
+            // info_full 里「看过 xxx」那个链接的文本中。排除章节链接：那是「看过 ep.13」形态，
+            // 剩下的链接文本里动作词（看过/在读…）与条目名贴在一起，要去掉动作词只留条目名
+            val workVerb = Regex("""^(看过|读过|玩过|听过|在看|在读|在玩|在听|想看|想读|想玩|想听|搁置|抛弃)""")
+            val episodeOnly = Regex("""^ep\.?\s*\d+$""", RegexOption.IGNORE_CASE)
             val infoAnchorTitle = Regex("""<a\b([^>]*)>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE)
                 .findAll(descHtml)
                 .firstOrNull { m -> !m.groupValues[1].contains("/subject/ep/", ignoreCase = true) }
-                ?.groupValues?.get(2)?.let { plainText(it) }.orEmpty()
+                ?.groupValues?.get(2)?.let { plainText(it) }
+                ?.replace(workVerb, "")?.trim()
+                ?.takeUnless { it.isEmpty() || episodeOnly.matches(it) }.orEmpty()
             val dataNameCn = Regex("""data-subject-name-cn\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
                 .find(block)?.groupValues?.get(1)?.let { plainText(it) }.orEmpty()
             val dataName = Regex("""\bdata-subject-name\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)

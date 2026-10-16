@@ -2,6 +2,7 @@ package com.bangumi.ywylite.ui.screen
 
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
@@ -108,8 +109,8 @@ fun ExploreScreen(
     var uiState by remember { mutableStateOf(cachedExploreState ?: ExploreUiState()) }
     var skipAutoLoad by remember { mutableStateOf(cachedExploreState != null) }
     val gridState = rememberLazyStaggeredGridState()
-    // 切换筛选时的内容过渡（跟手拖动 → 滑出旧内容 → 换筛选 → 从另一侧滑入并渐显）。
-    // 动画由过渡自己管，屏幕侧不再持 Job：手指接管或下一次切换会把它取消
+    // 切换筛选的翻页过渡：当前页跟手，左右相邻筛选各占一屏紧贴其边缘一起移动。
+    // 动画由过渡自己管，屏幕侧不持 Job：手指接管或下一次翻页会把它取消
     val filterTransition = rememberFilterTransition()
     // 每个筛选的第一页缓存 + 相邻筛选预取：滑动切换不再重新请求
     val filterCache = remember {
@@ -228,7 +229,7 @@ fun ExploreScreen(
         return (if (typeIndex >= 0) typeIndex else 0) * swipeSorts.size
     }
     /**
-     * @param velocity 松手速度（横滑传来）：决定滑出快慢，点 tab/chip 时为 0
+     * @param velocity 松手速度（横滑传来）：决定翻页快慢，点 tab/chip 时为 0
      */
     fun selectBrowsePosition(type: Int, sort: String, velocity: Float = 0f) {
         val from = currentPosition()
@@ -238,9 +239,35 @@ fun ExploreScreen(
         pendingPosition = type to sort
         filterTransition.switchTo(forward, velocity) {
             gridState.scrollToItem(0)
-            uiState = uiState.copy(selectedType = type, selectedSort = sort)
+            // 新筛选的数据要在这一帧就写上：翻页动画结束时屏幕上那页正是相邻页（渲染的就是
+            // 缓存里的这份数据），错后一帧才填会先闪一下旧内容。缓存没有就走加载屏，
+            // 与相邻页此刻渲染的加载屏一致
+            val cached = filterCache.peek(type to sort)
+            uiState = if (cached != null) {
+                uiState.copy(
+                    selectedType = type,
+                    selectedSort = sort,
+                    loading = false,
+                    error = null,
+                    data = cached.page.data,
+                    offset = cached.offset,
+                    hasMore = cached.hasMore,
+                    total = cached.page.total,
+                    loadMoreError = false
+                )
+            } else {
+                uiState.copy(
+                    selectedType = type,
+                    selectedSort = sort,
+                    loading = true,
+                    error = null,
+                    offset = 0,
+                    hasMore = false,
+                    loadMoreError = false
+                )
+            }
         }.invokeOnCompletion {
-            // 过渡跑完（或被手指接管/被下一次切换取消）且没有更新的一次切换，交回给 uiState 作为基准
+            // 翻页跑完（或被手指接管/被下一次翻页取消）且没有更新的一次切换，交回给 uiState 作为基准
             if (pendingPosition == (type to sort)) pendingPosition = null
         }
     }
@@ -259,11 +286,15 @@ fun ExploreScreen(
         selectBrowsePosition(target.first, target.second, velocity)
         return true
     }
+    /** 左边一页（手指向右滑时露出来的那个筛选），序列首位为 null */
+    fun prevNeighbour(type: Int, sort: String): Pair<Int, String>? =
+        swipePositions.getOrNull(browsePositionIndex(type, sort) - 1)
+    /** 右边一页（手指向左滑时露出来的那个筛选），序列末位为 null */
+    fun nextNeighbour(type: Int, sort: String): Pair<Int, String>? =
+        swipePositions.getOrNull(browsePositionIndex(type, sort) + 1)
     /** 左右相邻筛选（预取用） */
-    fun neighbourPositions(type: Int, sort: String): List<Pair<Int, String>> {
-        val index = browsePositionIndex(type, sort)
-        return listOfNotNull(swipePositions.getOrNull(index - 1), swipePositions.getOrNull(index + 1))
-    }
+    fun neighbourPositions(type: Int, sort: String): List<Pair<Int, String>> =
+        listOfNotNull(prevNeighbour(type, sort), nextNeighbour(type, sort))
 
     LaunchedEffect(uiState.selectedType, uiState.selectedSort, uiState.retryKey) {
         val key = uiState.selectedType to uiState.selectedSort
@@ -287,8 +318,6 @@ fun ExploreScreen(
                 loadMoreError = false
             )
             prefetchNeighbours()
-            // 预取命中：新内容就在这一帧，放行过渡的渐显
-            filterTransition.contentReady()
             return@LaunchedEffect
         }
         // hasMore 必须一并清掉：列表被换成加载屏时 layoutInfo 为空，
@@ -306,14 +335,10 @@ fun ExploreScreen(
                 total = entry.page.total
             )
             prefetchNeighbours()
-            // 现拉的首拉回来了：放行渐显
-            filterTransition.contentReady()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             uiState = uiState.copy(loading = false, error = e.message)
-            // 失败同样要放行：错误页也得看得清，不能一直停在半透明
-            filterTransition.contentReady()
         }
     }
 
@@ -384,73 +409,128 @@ fun ExploreScreen(
             PullToRefreshBox(
                 isRefreshing = uiState.refreshing,
                 onRefresh = refresh,
-                // 过渡挂在内容区上（类型 tab 与排序 chip 留在原地不跟着动）
-                modifier = Modifier.fillMaxSize()
-                    .then(browseSwipeModifier)
-                    .then(filterTransition.modifier)
+                // 手势挂在整块内容区上（类型 tab 与排序 chip 留在原地不跟着动）
+                modifier = Modifier.fillMaxSize().then(browseSwipeModifier)
             ) {
-            LazyVerticalStaggeredGrid(
-                // 自适应列宽：窄屏 3 列左右，平板自动多列
-                columns = StaggeredGridCells.Adaptive(110.dp),
-                state = gridState,
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalItemSpacing = 6.dp,
-                modifier = Modifier.fillMaxSize()
-            ) {
-                when {
-                    uiState.loading -> item(span = StaggeredGridItemSpan.FullLine) { LoadingView() }
-                    uiState.error != null -> item(span = StaggeredGridItemSpan.FullLine) {
-                        ErrorView(
-                            message = uiState.error ?: "加载失败",
-                            onRetry = {
-                                uiState = uiState.copy(
-                                    loading = true,
-                                    error = null,
-                                    offset = 0,
-                                    retryKey = uiState.retryKey + 1
-                                )
-                            }
-                        )
+                FilterPager(
+                    transition = filterTransition,
+                    // 左右相邻筛选各一屏：内容取预取好的缓存，手指拖动时紧跟着露出来
+                    prev = prevNeighbour(uiState.selectedType, uiState.selectedSort)?.let { key ->
+                        { BrowseNeighbourPage(key, filterCache.peek(key), onSubjectClick) }
+                    },
+                    next = nextNeighbour(uiState.selectedType, uiState.selectedSort)?.let { key ->
+                        { BrowseNeighbourPage(key, filterCache.peek(key), onSubjectClick) }
                     }
-                    uiState.data.isEmpty() -> item(span = StaggeredGridItemSpan.FullLine) { EmptyView() }
-                    else -> {
-                        // 翻页接口可能返回重叠数据，重复 key 会让网格直接崩溃（平板宽屏预取更多更容易触发）
-                        items(uiState.data.distinctBy { it.id }, key = { it.id }) { subject ->
-                            SubjectCard(
-                                subject = subject,
-                                onClick = { onSubjectClick(subject.id) },
-                                modifier = Modifier.fillMaxWidth()
+                ) {
+                    BrowseGrid(
+                        state = gridState,
+                        data = uiState.data,
+                        loading = uiState.loading,
+                        error = uiState.error,
+                        hasMore = uiState.hasMore,
+                        loadMoreError = uiState.loadMoreError,
+                        onRetry = {
+                            uiState = uiState.copy(
+                                loading = true,
+                                error = null,
+                                offset = 0,
+                                retryKey = uiState.retryKey + 1
                             )
-                        }
-                        if (uiState.hasMore) {
-                            item(span = StaggeredGridItemSpan.FullLine) {
-                                if (uiState.loadMoreError) {
-                                    TextButton(
-                                        onClick = {
-                                            uiState = uiState.copy(
-                                                loadMoreError = false,
-                                                loadMoreKey = uiState.loadMoreKey + 1
-                                            )
-                                        },
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text("加载失败，点击重试")
-                                    }
-                                } else {
-                                    Box(
-                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                    }
-                                }
+                        },
+                        onLoadMoreRetry = {
+                            uiState = uiState.copy(
+                                loadMoreError = false,
+                                loadMoreKey = uiState.loadMoreKey + 1
+                            )
+                        },
+                        onSubjectClick = onSubjectClick
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 浏览页的一屏（当前页与相邻页共用；相邻页不参与分页/刷新，hasMore 传 false） */
+@Composable
+private fun BrowseGrid(
+    state: LazyStaggeredGridState,
+    data: List<SubjectSmall>,
+    loading: Boolean,
+    error: String?,
+    hasMore: Boolean,
+    loadMoreError: Boolean,
+    onRetry: () -> Unit,
+    onLoadMoreRetry: () -> Unit,
+    onSubjectClick: (Int) -> Unit
+) {
+    LazyVerticalStaggeredGrid(
+        // 自适应列宽：窄屏 3 列左右，平板自动多列
+        columns = StaggeredGridCells.Adaptive(110.dp),
+        state = state,
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalItemSpacing = 6.dp,
+        modifier = Modifier.fillMaxSize()
+    ) {
+        when {
+            loading -> item(span = StaggeredGridItemSpan.FullLine) { LoadingView() }
+            error != null -> item(span = StaggeredGridItemSpan.FullLine) {
+                ErrorView(message = error, onRetry = onRetry)
+            }
+            data.isEmpty() -> item(span = StaggeredGridItemSpan.FullLine) { EmptyView() }
+            else -> {
+                // 翻页接口可能返回重叠数据，重复 key 会让网格直接崩溃（平板宽屏预取更多更容易触发）
+                items(data.distinctBy { it.id }, key = { it.id }) { subject ->
+                    SubjectCard(
+                        subject = subject,
+                        onClick = { onSubjectClick(subject.id) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (hasMore) {
+                    item(span = StaggeredGridItemSpan.FullLine) {
+                        if (loadMoreError) {
+                            TextButton(onClick = onLoadMoreRetry, modifier = Modifier.fillMaxWidth()) {
+                                Text("加载失败，点击重试")
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
                             }
                         }
                     }
                 }
             }
-            }
         }
+    }
+}
+
+/** 相邻筛选那一屏：数据取预取缓存，还没到位就先显示加载屏（预取回来会自动填上） */
+@Composable
+private fun BrowseNeighbourPage(
+    filterKey: Pair<Int, String>,
+    entry: FilterPageCache.Entry<SubjectSmall>?,
+    onSubjectClick: (Int) -> Unit
+) {
+    if (entry == null) {
+        LoadingView()
+        return
+    }
+    key(filterKey) {
+        BrowseGrid(
+            state = rememberLazyStaggeredGridState(),
+            data = entry.page.data,
+            loading = false,
+            error = null,
+            hasMore = false,
+            loadMoreError = false,
+            onRetry = {},
+            onLoadMoreRetry = {},
+            onSubjectClick = onSubjectClick
+        )
     }
 }

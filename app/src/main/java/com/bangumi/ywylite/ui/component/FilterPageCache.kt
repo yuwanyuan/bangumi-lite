@@ -1,5 +1,6 @@
 package com.bangumi.ywylite.ui.component
 
+import androidx.compose.runtime.mutableStateMapOf
 import com.bangumi.ywylite.App
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -18,6 +19,9 @@ class FilterPage<T>(val data: List<T>, val total: Int)
  * - 同一筛选的并发请求只发一次：首拉与预取撞车时共用同一个请求
  * - 账号切换（登录/登出）后整份作废——缓存里含该账号的收藏内容
  *
+ * [entries] 是可观察的：翻页把相邻筛选的内容渲染在旁边，预取完成时那一页要自动填上，
+ * 不能等下一次重组才显示。
+ *
  * 请求跑在传入的 [scope]（屏幕的 composition scope）上：预取不会被某次首拉的取消带走，
  * 离开该屏幕时随之取消。
  */
@@ -30,7 +34,7 @@ class FilterPageCache<K : Any, T>(
         val hasMore: Boolean = page.data.size < page.total
     }
 
-    private val entries = mutableMapOf<K, Entry<T>>()
+    private val entries = mutableStateMapOf<K, Entry<T>>()
     private val inFlight = mutableMapOf<K, Deferred<Entry<T>>>()
     private var generation = App.INSTANCE.api.sessionGeneration
 

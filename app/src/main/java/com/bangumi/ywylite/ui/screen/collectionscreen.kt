@@ -10,8 +10,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
@@ -32,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.PagedUserCollection
+import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.data.model.UserCollection
 import com.bangumi.ywylite.ui.component.*
 import kotlinx.coroutines.CancellationException
@@ -101,6 +104,9 @@ private val subjectTypeFilters = listOf(
     6 to "三次元"
 )
 
+/** 翻页按哪条序列：横滑/收藏状态 tab 走 [Collection]，二级条目类型 chip 走 [SubjectType] */
+private enum class CollectionPageAxis { Collection, SubjectType }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CollectionScreen(
@@ -121,8 +127,8 @@ fun CollectionScreen(
     val waterfall by app.settings.collectionWaterfall.collectAsState(initial = false)
     val listState = rememberLazyListState()
     val gridState = rememberLazyStaggeredGridState()
-    // 切换筛选时的内容过渡（跟手拖动 → 滑出旧内容 → 换筛选 → 从另一侧滑入并渐显）。
-    // 动画由过渡自己管，屏幕侧不再持 Job：手指接管或下一次切换会把它取消
+    // 切换筛选的翻页过渡：当前页跟手，左右相邻筛选各占一屏紧贴其边缘一起移动。
+    // 动画由过渡自己管，屏幕侧不持 Job：手指接管或下一次翻页会把它取消
     val filterTransition = rememberFilterTransition()
     // 每个筛选的第一页缓存 + 相邻筛选预取：滑动切换不再重新请求
     val filterCache = remember {
@@ -143,7 +149,39 @@ fun CollectionScreen(
     fun currentFilter(): Pair<Int?, Int?> =
         pendingFilter ?: (uiState.selectedType to uiState.selectedSubjectType)
     /**
-     * @param velocity 松手速度（横滑传来）：决定滑出快慢，点 tab/chip 时为 0
+     * 当前按哪条序列翻页：横滑和点收藏状态 tab 走收藏状态序列，
+     * 点二级「条目类型」chip 走条目类型序列。相邻页的内容按它算，才能和翻页方向对上。
+     */
+    var pageAxis by remember { mutableStateOf(CollectionPageAxis.Collection) }
+    /** 变更筛选后的状态：缓存命中就用缓存的数据，否则转加载屏（与相邻页此刻渲染的一致） */
+    fun applyCached(type: Int?, subjectType: Int?): CollectionUiState {
+        val cached = filterCache.peek(type to subjectType)
+        return if (cached != null) {
+            uiState.copy(
+                selectedType = type,
+                selectedSubjectType = subjectType,
+                loading = false,
+                error = null,
+                data = cached.page.data,
+                offset = cached.offset,
+                hasMore = cached.hasMore,
+                total = cached.page.total,
+                loadMoreError = false
+            )
+        } else {
+            uiState.copy(
+                selectedType = type,
+                selectedSubjectType = subjectType,
+                loading = true,
+                error = null,
+                offset = 0,
+                hasMore = false,
+                loadMoreError = false
+            )
+        }
+    }
+    /**
+     * @param velocity 松手速度（横滑传来）：决定翻页快慢，点 tab/chip 时为 0
      */
     fun selectCollectionType(type: Int?, velocity: Float = 0f) {
         val from = currentFilter()
@@ -152,11 +190,14 @@ fun CollectionScreen(
         val forward = collectionTypes.indexOfFirst { it.first == type } >
             collectionTypes.indexOfFirst { it.first == from.first }
         pendingFilter = type to from.second
+        pageAxis = CollectionPageAxis.Collection
         filterTransition.switchTo(forward, velocity) {
             if (waterfall) gridState.scrollToItem(0) else listState.scrollToItem(0)
-            uiState = uiState.copy(selectedType = type)
+            // 新筛选的数据要在这一帧就写上：翻页动画结束时屏幕上那页正是相邻页（渲染的就是
+            // 缓存里的这份数据），错后一帧才填会先闪一下旧内容
+            uiState = applyCached(type, from.second)
         }.invokeOnCompletion {
-            // 过渡跑完（或被手指接管/被下一次切换取消）且没有更新的一次切换，交回给 uiState 作为基准
+            // 翻页跑完（或被手指接管/被下一次翻页取消）且没有更新的一次切换，交回给 uiState 作为基准
             if (pendingFilter == (type to from.second)) pendingFilter = null
         }
     }
@@ -166,9 +207,10 @@ fun CollectionScreen(
         val forward = subjectTypeFilters.indexOfFirst { it.first == type } >
             subjectTypeFilters.indexOfFirst { it.first == from.second }
         pendingFilter = from.first to type
+        pageAxis = CollectionPageAxis.SubjectType
         filterTransition.switchTo(forward, velocity) {
             if (waterfall) gridState.scrollToItem(0) else listState.scrollToItem(0)
-            uiState = uiState.copy(selectedSubjectType = type)
+            uiState = applyCached(from.first, type)
         }.invokeOnCompletion {
             if (pendingFilter == (from.first to type)) pendingFilter = null
         }
@@ -191,11 +233,25 @@ fun CollectionScreen(
         return listOfNotNull(collectionTypes.getOrNull(index - 1), collectionTypes.getOrNull(index + 1))
             .map { it.first to subjectType }
     }
+    /** 翻页时露出来的左右两页（按 [pageAxis] 决定哪条序列；序列首尾为 null） */
+    fun neighbourPageKey(step: Int): Pair<Int?, Int?>? = when (pageAxis) {
+        CollectionPageAxis.Collection -> {
+            val index = collectionTypes.indexOfFirst { it.first == uiState.selectedType }
+            collectionTypes.getOrNull(index + step)?.let { it.first to uiState.selectedSubjectType }
+        }
+        CollectionPageAxis.SubjectType -> {
+            val index = subjectTypeFilters.indexOfFirst { it.first == uiState.selectedSubjectType }
+            subjectTypeFilters.getOrNull(index + step)?.let { uiState.selectedType to it.first }
+        }
+    }
     // 阈值按 dp 换算：裸像素在不同密度屏上手感差一倍
     val swipeThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
-    val collectionSwipeModifier = Modifier.filterSwipe(filterTransition, swipeThresholdPx) { forward, velocity ->
-        swipeStep(forward, velocity)
-    }
+    val collectionSwipeModifier = Modifier.filterSwipe(
+        transition = filterTransition,
+        thresholdPx = swipeThresholdPx,
+        // 横滑固定翻收藏状态序列，按下时先把轴切回来
+        onTakeOver = { pageAxis = CollectionPageAxis.Collection }
+    ) { forward, velocity -> swipeStep(forward, velocity) }
 
     // 状态落定即写入进程缓存；加载/刷新中的瞬态不入缓存，切页回来不会停在中间态
     LaunchedEffect(uiState) {
@@ -285,8 +341,6 @@ fun CollectionScreen(
                 loadMoreError = false
             )
             prefetchNeighbours()
-            // 预取命中：新内容就在这一帧，放行过渡的渐显
-            filterTransition.contentReady()
             return@LaunchedEffect
         }
         // hasMore 必须一并清掉：否则列表被换成加载屏时 layoutInfo 为空，
@@ -304,14 +358,10 @@ fun CollectionScreen(
                 hasMore = entry.hasMore
             )
             prefetchNeighbours()
-            // 现拉的首拉回来了：放行渐显
-            filterTransition.contentReady()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             uiState = uiState.copy(loading = false, error = e.message)
-            // 失败同样要放行：错误页也得看得清，不能一直停在半透明
-            filterTransition.contentReady()
         }
     }
 
@@ -445,134 +495,224 @@ fun CollectionScreen(
                 PullToRefreshBox(
                     isRefreshing = uiState.refreshing,
                     onRefresh = refresh,
-                    // 过渡挂在内容区上（tab 与二级筛选行留在原地不跟着动）
-                    modifier = Modifier.fillMaxSize()
-                        .then(collectionSwipeModifier)
-                        .then(filterTransition.modifier)
+                    // 手势挂在整块内容区上（tab 与二级筛选行留在原地不跟着动）
+                    modifier = Modifier.fillMaxSize().then(collectionSwipeModifier)
                 ) {
-                when {
-                    uiState.loading -> LoadingView()
-                    uiState.error != null -> ErrorView(
-                        message = uiState.error ?: "加载失败",
-                        onRetry = {
-                            uiState = uiState.copy(
-                                loading = true,
-                                error = null,
-                                offset = 0,
-                                retryKey = uiState.retryKey + 1
-                            )
-                        }
-                    )
-                    uiState.data.isEmpty() -> EmptyView("暂无收藏")
-                    else -> {
-                        if (waterfall) {
-                            // 与浏览页一致的瀑布流：自适应列宽 + SubjectCard
-                            LazyVerticalStaggeredGrid(
-                                columns = StaggeredGridCells.Adaptive(110.dp),
-                                state = gridState,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalItemSpacing = 6.dp,
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                // 翻页数据可能重叠，去重后再交给网格（重复 key 会崩溃）
-                                items(uiState.data.distinctBy { it.subjectId }, key = { it.subjectId }) { item ->
-                                    item.subject?.let { subject ->
-                                        SubjectCard(
-                                            subject = subject,
-                                            onClick = { onSubjectClick(subject.id) },
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                    }
-                                }
-                                if (uiState.hasMore) {
-                                    item(span = StaggeredGridItemSpan.FullLine) {
-                                        CollectionLoadMoreFooter(
-                                            loadMoreError = uiState.loadMoreError,
-                                            onRetry = {
-                                                uiState = uiState.copy(
-                                                    loadMoreError = false,
-                                                    loadMoreKey = uiState.loadMoreKey + 1
-                                                )
-                                            }
-                                        )
-                                    }
-                                }
+                FilterPager(
+                    transition = filterTransition,
+                    // 左右相邻筛选各一屏：内容取预取好的缓存，手指拖动时紧跟着露出来
+                    prev = neighbourPageKey(-1)?.let { key ->
+                        { CollectionNeighbourPage(key, filterCache.peek(key), waterfall, onSubjectClick) }
+                    },
+                    next = neighbourPageKey(+1)?.let { key ->
+                        { CollectionNeighbourPage(key, filterCache.peek(key), waterfall, onSubjectClick) }
+                    }
+                ) {
+                    when {
+                        uiState.loading -> LoadingView()
+                        uiState.error != null -> ErrorView(
+                            message = uiState.error ?: "加载失败",
+                            onRetry = {
+                                uiState = uiState.copy(
+                                    loading = true,
+                                    error = null,
+                                    offset = 0,
+                                    retryKey = uiState.retryKey + 1
+                                )
                             }
-                        } else {
-                        LazyColumn(
+                        )
+                        uiState.data.isEmpty() -> EmptyView("暂无收藏")
+                        waterfall -> CollectionWaterfall(
+                            state = gridState,
+                            data = uiState.data,
+                            hasMore = uiState.hasMore,
+                            loadMoreError = uiState.loadMoreError,
+                            onLoadMoreRetry = {
+                                uiState = uiState.copy(
+                                    loadMoreError = false,
+                                    loadMoreKey = uiState.loadMoreKey + 1
+                                )
+                            },
+                            onSubjectClick = onSubjectClick
+                        )
+                        else -> CollectionRows(
                             state = listState,
-                            contentPadding = PaddingValues(vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            // 翻页数据可能重叠，去重后再交给列表（重复 key 会崩溃）
-                            items(uiState.data.distinctBy { it.subjectId }, key = { it.subjectId }) { item ->
-                                item.subject?.let { subject ->
-                                    Column {
-                                        val cardShape = RoundedCornerShape(18.dp)
-                                        val cardBackground = if (isSystemInDarkTheme()) {
-                                            MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
-                                        } else {
-                                            MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
-                                        }
-                                        Column(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clip(cardShape)
-                                                .background(cardBackground, cardShape)
-                                                .then(wallpaperGlassPanel(isSystemInDarkTheme()))
-                                        ) {
-                                            SubjectListItem(
-                                                subject = subject,
-                                                onClick = { onSubjectClick(subject.id) },
-                                                transparentContainer = true
-                                            )
-                                            if (uiState.selectedType == null) {
-                                                item.type?.let { type ->
-                                                    val color = collectionTypeColors[type]
-                                                    val label = collectionTypeLabels[type]
-                                                    if (color != null && label != null) {
-                                                        Row(
-                                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-                                                            verticalAlignment = Alignment.CenterVertically,
-                                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                                        ) {
-                                                            Surface(
-                                                                modifier = Modifier.size(8.dp),
-                                                                shape = CircleShape,
-                                                                color = color
-                                                            ) {}
-                                                            Text(label, style = MaterialTheme.typography.labelSmall, color = color)
-                                                            if (item.rate > 0) {
-                                                                Text("★${item.rate}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            if (uiState.hasMore) {
-                                item {
-                                    CollectionLoadMoreFooter(
-                                        loadMoreError = uiState.loadMoreError,
-                                        onRetry = {
-                                            uiState = uiState.copy(
-                                                loadMoreError = false,
-                                                loadMoreKey = uiState.loadMoreKey + 1
-                                            )
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                        }
+                            data = uiState.data,
+                            collectionType = uiState.selectedType,
+                            hasMore = uiState.hasMore,
+                            loadMoreError = uiState.loadMoreError,
+                            onLoadMoreRetry = {
+                                uiState = uiState.copy(
+                                    loadMoreError = false,
+                                    loadMoreKey = uiState.loadMoreKey + 1
+                                )
+                            },
+                            onSubjectClick = onSubjectClick
+                        )
                     }
                 }
                 }
             }
+        }
+    }
+}
+
+/** 收藏页的一屏（瀑布流）：当前页与相邻页共用；相邻页不分页，hasMore 传 false */
+@Composable
+private fun CollectionWaterfall(
+    state: LazyStaggeredGridState,
+    data: List<UserCollection>,
+    hasMore: Boolean,
+    loadMoreError: Boolean,
+    onLoadMoreRetry: () -> Unit,
+    onSubjectClick: (Int) -> Unit
+) {
+    // 与浏览页一致的瀑布流：自适应列宽 + SubjectCard
+    LazyVerticalStaggeredGrid(
+        columns = StaggeredGridCells.Adaptive(110.dp),
+        state = state,
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalItemSpacing = 6.dp,
+        modifier = Modifier.fillMaxSize()
+    ) {
+        // 翻页数据可能重叠，去重后再交给网格（重复 key 会崩溃）
+        items(data.distinctBy { it.subjectId }, key = { it.subjectId }) { item ->
+            item.subject?.let { subject ->
+                SubjectCard(
+                    subject = subject,
+                    onClick = { onSubjectClick(subject.id) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+        if (hasMore) {
+            item(span = StaggeredGridItemSpan.FullLine) {
+                CollectionLoadMoreFooter(loadMoreError = loadMoreError, onRetry = onLoadMoreRetry)
+            }
+        }
+    }
+}
+
+/** 收藏页的一屏（经典列表）：行套毛玻璃面板，看「全部」时标注每个条目的收藏状态 */
+@Composable
+private fun CollectionRows(
+    state: LazyListState,
+    data: List<UserCollection>,
+    collectionType: Int?,
+    hasMore: Boolean,
+    loadMoreError: Boolean,
+    onLoadMoreRetry: () -> Unit,
+    onSubjectClick: (Int) -> Unit
+) {
+    LazyColumn(
+        state = state,
+        contentPadding = PaddingValues(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        // 翻页数据可能重叠，去重后再交给列表（重复 key 会崩溃）
+        items(data.distinctBy { it.subjectId }, key = { it.subjectId }) { item ->
+            item.subject?.let { subject ->
+                CollectionRow(
+                    subject = subject,
+                    item = item,
+                    collectionType = collectionType,
+                    onSubjectClick = onSubjectClick
+                )
+            }
+        }
+        if (hasMore) {
+            item {
+                CollectionLoadMoreFooter(loadMoreError = loadMoreError, onRetry = onLoadMoreRetry)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CollectionRow(
+    subject: SubjectSmall,
+    item: UserCollection,
+    collectionType: Int?,
+    onSubjectClick: (Int) -> Unit
+) {
+    val darkTheme = isSystemInDarkTheme()
+    val cardShape = RoundedCornerShape(18.dp)
+    val cardBackground = if (darkTheme) {
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+    } else {
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .background(cardBackground, cardShape)
+            .then(wallpaperGlassPanel(darkTheme, cardShape))
+    ) {
+        SubjectListItem(
+            subject = subject,
+            onClick = { onSubjectClick(subject.id) },
+            transparentContainer = true
+        )
+        if (collectionType == null) {
+            item.type?.let { type ->
+                val color = collectionTypeColors[type]
+                val label = collectionTypeLabels[type]
+                if (color != null && label != null) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Surface(
+                            modifier = Modifier.size(8.dp),
+                            shape = CircleShape,
+                            color = color
+                        ) {}
+                        Text(label, style = MaterialTheme.typography.labelSmall, color = color)
+                        if (item.rate > 0) {
+                            Text("★${item.rate}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 相邻筛选那一屏：数据取预取缓存，还没到位就先显示加载屏（预取回来会自动填上） */
+@Composable
+private fun CollectionNeighbourPage(
+    filterKey: Pair<Int?, Int?>,
+    entry: FilterPageCache.Entry<UserCollection>?,
+    waterfall: Boolean,
+    onSubjectClick: (Int) -> Unit
+) {
+    if (entry == null) {
+        LoadingView()
+        return
+    }
+    key(filterKey) {
+        if (waterfall) {
+            CollectionWaterfall(
+                state = rememberLazyStaggeredGridState(),
+                data = entry.page.data,
+                hasMore = false,
+                loadMoreError = false,
+                onLoadMoreRetry = {},
+                onSubjectClick = onSubjectClick
+            )
+        } else {
+            CollectionRows(
+                state = rememberLazyListState(),
+                data = entry.page.data,
+                collectionType = filterKey.first,
+                hasMore = false,
+                loadMoreError = false,
+                onLoadMoreRetry = {},
+                onSubjectClick = onSubjectClick
+            )
         }
     }
 }

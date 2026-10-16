@@ -1,11 +1,14 @@
 package com.bangumi.ywylite.ui.component
 
-import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -13,140 +16,86 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
-/** 过渡节奏：跟手弹回 200ms、滑出 120–240ms（松手越快越短）、滑入渐显 300ms */
-private const val OUT_MIN_MS = 120
-private const val OUT_MAX_MS = 240
-private const val IN_DURATION_MS = 300
+/** 过渡节奏：未达阈值弹回 200ms、翻页 200–340ms（行程越短、松手越快越短） */
 private const val SETTLE_DURATION_MS = 200
+private const val PAGE_MIN_MS = 200
+private const val PAGE_MAX_MS = 340
+
+/** 用松手速度估算翻页时长时的上下限（px/s），避免慢悠悠拖尾或一帧闪走 */
+private const val MIN_SWIPE_VELOCITY = 900f
+private const val MAX_SWIPE_VELOCITY = 4000f
 
 /**
- * 新内容迟迟没渲染出来的兜底等待；正常路径由 [FilterTransition.contentReady] 放行。
- * 给得宽一点：这段时间透明度停在 [SWAP_FADE]，转圈是淡的但看得见，
- * 数据一到就能淡上来；真超过这个时长（网络很慢）就只能先亮起来、随内容到位再硬换
- */
-private const val CONTENT_WAIT_MS = 1500L
-
-/**
- * 跟手阶段 1:1 能拖到的距离（再往外按阻尼走），与整页滑出/滑入距离，都按屏宽比。
+ * 翻页过渡（浏览页 / 收藏页 / 每日放送共用）：页面之间始终相邻，翻页过程中屏幕永远被两页填满。
  *
- * [PAGE_SCREEN_FRACTION] 必须大于 1：滑出终点和滑入起点都得真的离开屏幕。
- * 换页时新旧内容是同一个容器（不可能同时渲染两份），所以那一刻的内容位置只要还有一部分
- * 露在屏内，就会被看成「瞬移」——用户反馈的「新的一页突然出现在屏幕中间」就是这么来的。
- * 两头都出屏，换页发生在屏幕外，新内容才是从边缘完整滑进来的。
- */
-private const val SLIDE_SCREEN_FRACTION = 0.28f
-private const val PAGE_SCREEN_FRACTION = 1.05f
-
-/** 内容透明度：跟手时最低 0.7；换页时两边同为 0.3，接起来像一次淡出淡入 */
-private const val DRAG_FADE_MIN = 0.7f
-private const val SWAP_FADE = 0.3f
-
-/**
- * 超出翻页距离后继续跟手的阻尼比。给得偏大是刻意的：这一阶段越跟手，松开后要补的位移越少，
- * 整体越像「手指把这一页划走」，而不是「划到一半卡住等动画」
- */
-private const val DRAG_RESISTANCE = 0.4f
-
-/** 用松手速度算滑出时长时的上下限（px/s），避免慢悠悠拖尾或一帧闪走 */
-private const val MIN_EXIT_VELOCITY = 900f
-private const val MAX_EXIT_VELOCITY = 4000f
-
-/**
- * 筛选切换的内容过渡（浏览页 / 收藏页 / 每日放送共用）。
+ * 手势和动画都只改 [offset] 一个值：
+ * - 当前页按 offset 平移（[FilterPager] 的 current 槽）
+ * - 左边一页 = offset - 页宽，右边一页 = offset + 页宽（prev / next 槽）
  *
- * 三种用法：
- * - 手势跟手：[takeOver] 接管（取消进行中的动画）+ [drag] 直接按手指位移平移内容，不用等松手。
- * - 松手未达阈值：[settleBack] 弹回原位。
- * - 达阈值或点 tab/chip：[switchTo] 从手指松开的位置继续推，把旧内容真正推出屏幕并淡出；
- *   换内容后新内容从另一侧滑入，透明度由 [contentReady] 放行后渐显。
+ * 这样手指拖到哪，相邻页的边就跟到哪，中间不会露出空白；翻页动画把 offset 补到 ±页宽时，
+ * 相邻页正好落在屏幕正中，此时才 [apply] 换筛选并把 offset 复位——「换内容」发生在屏幕外，
+ * 而且换之前屏幕上那页（相邻页，数据来自缓存）与换之后（当前页）是同一份数据，所以看不见切换。
  *
- * 位置与透明度都是普通 float 状态，在 graphicsLayer 的 lambda 里读：过渡期间只重绘不重组。
+ * 位置是普通 float 状态，在 graphicsLayer 的 lambda 里读：过渡期间只重绘不重组。
  */
 class FilterTransition internal constructor(
-    private val travelPx: Float,
-    private val pagePx: Float,
     private val scope: CoroutineScope
 ) {
-    private val offset = mutableFloatStateOf(0f)
-    private val fade = mutableFloatStateOf(1f)
+    /** 一页的宽度（px）：由 [FilterPager] 按容器实测宽度写入（容器不一定是屏宽） */
+    internal var pageWidthPx = 0f
+
+    private val offsetState = mutableFloatStateOf(0f)
     private var animJob: Job? = null
 
     /** 本次跟手的起点：接管时从动画停住的位置接着拖，内容不会跳一下 */
     private var dragBase = 0f
 
-    /** 当前这次切换的「新内容已就绪」信号；每次切换换一个新的 */
-    private var contentSignal: CompletableDeferred<Unit>? = null
+    /** 当前页的位移（px，负 = 内容向左移，即向后翻一页） */
+    val offset: Float get() = offsetState.floatValue
 
-    val modifier: Modifier
-        get() = Modifier.graphicsLayer {
-            translationX = offset.floatValue
-            alpha = fade.floatValue
-        }
+    /** 是否处在翻页过程中（拖动中或动画中）：只有这时才需要渲染相邻页 */
+    val engaged: Boolean get() = offsetState.floatValue != 0f
 
     /**
      * 手指按下接管：取消进行中的动画（否则动画和手指会同时写位移，互相打架），
-     * 并把当前停住的位置记为本次跟手的起点——不管是滑到一半还是刚从屏外滑回来，
-     * 内容都从它此刻所在的位置继续被拖，不会跳一下。夹 ±整页距离只是防御越界值。
+     * 并把当前停住的位置记为本次跟手的起点——内容从它此刻所在的位置继续被拖，不会跳一下。
      */
     fun takeOver() {
         animJob?.cancel()
         animJob = null
-        dragBase = offset.floatValue.coerceIn(-pagePx, pagePx)
+        dragBase = offsetState.floatValue
     }
 
-    /** 手势跟手：内容 1:1 跟手指走，超过翻页距离后加阻尼；同时轻微淡出作为翻页反馈 */
+    /** 手势跟手：1:1 跟手指走，最多拖满一页（再多就是序列边界，硬边界由 coerceIn 兜住） */
     fun drag(totalPx: Float) {
-        val moved = dragBase + withResistance(totalPx)
-        offset.floatValue = moved
-        // 取小值：从动画中途接管时透明度只降不升，不会因为「跟手曲线」比当前值高而闪一下
-        fade.floatValue = minOf(fade.floatValue, dragFade(moved))
+        val width = pageWidthPx
+        offsetState.floatValue = (dragBase + totalPx).coerceIn(-width, width)
     }
 
     /** 松手但不切页：弹回原位 */
     fun settleBack() {
         animJob?.cancel()
         animJob = scope.launch {
-            coroutineScope {
-                launch {
-                    animate(
-                        offset.floatValue, 0f,
-                        animationSpec = tween(SETTLE_DURATION_MS, easing = FastOutSlowInEasing)
-                    ) { value, _ -> offset.floatValue = value }
-                }
-                launch {
-                    animate(
-                        fade.floatValue, 1f,
-                        animationSpec = tween(SETTLE_DURATION_MS, easing = FastOutSlowInEasing)
-                    ) { value, _ -> fade.floatValue = value }
-                }
-            }
+            animate(
+                offsetState.floatValue, 0f,
+                animationSpec = tween(SETTLE_DURATION_MS, easing = FastOutSlowInEasing)
+            ) { value, _ -> offsetState.floatValue = value }
         }
     }
 
     /**
-     * 切换筛选。两个关键点：
+     * 翻页。
      *
-     * 1. 不能停：滑出的终点要真正离开屏幕，而不是跟手能达到的那点距离——否则正常力度一划松手时
-     *    内容已经贴在跟手终点上，滑出动画无事可做，中间就是一段空白停顿；时长再按松手速度算，
-     *    快划干脆、慢放平稳，动作和手指接得上。
-     * 2. 换页要发生在屏幕外：新旧内容共用一个容器，滑出终点与滑入起点都在屏外，
-     *    这一帧的「换」才看不见；否则新内容会像是「突然出现在屏幕中间」，再挪那么一小段。
-     *
-     * @param forward 沿序列向后（手势向左滑）：旧内容向左推出，新内容从右侧进入。
+     * @param forward 沿序列向后（手势向左滑）：当前页向左移出，右边那页移到正中。
      * @param velocityPxPerSec 松手瞬间的手指速度，点 tab/chip 触发时传 0。
-     * @param apply 真正的切换动作（列表回顶 + 改筛选状态）。这里只做状态变更，不发起加载等待。
-     * @return 本次过渡的 Job，可用来在跑完后收尾（被下一次切换/手指接管会取消）
+     * @param apply 换筛选的动作（列表回顶 + 改筛选状态 + 写入新筛选已缓存的数据）。
+     *   在动画跑完（相邻页已在屏幕正中）之后调用，此刻屏幕上看不到这次内容切换。
+     * @return 本次翻页的 Job，可用来在跑完后收尾（被手指接管或下一次翻页会取消）
      */
     fun switchTo(
         forward: Boolean,
@@ -154,97 +103,93 @@ class FilterTransition internal constructor(
         apply: suspend () -> Unit
     ): Job {
         animJob?.cancel()
-        val signal = CompletableDeferred<Unit>()
-        contentSignal = signal
-        val direction = if (forward) -1f else 1f
+        val target = (if (forward) -1f else 1f) * pageWidthPx
         val job = scope.launch {
-            // 1) 滑出：从当前位置继续往前推，一路推到屏幕外
-            //    （终点一定比当前位置更靠外，绝不往回走；否则松手时动画没有位移可走，中间就是一段停顿）
-            val from = offset.floatValue
-            val target = direction * maxOf(pagePx, abs(from) + travelPx * 0.35f)
-            val outMs = outDuration(abs(target - from), velocityPxPerSec)
-            coroutineScope {
-                launch {
-                    animate(
-                        from, target,
-                        animationSpec = tween(outMs, easing = FastOutLinearInEasing)
-                    ) { value, _ -> offset.floatValue = value }
-                }
-                launch {
-                    animate(
-                        fade.floatValue, SWAP_FADE,
-                        animationSpec = tween(outMs, easing = FastOutLinearInEasing)
-                    ) { value, _ -> fade.floatValue = value }
-                }
-            }
+            val from = offsetState.floatValue
+            val durationMs = pageDuration(abs(target - from), velocityPxPerSec)
+            animate(
+                from, target,
+                animationSpec = tween(durationMs, easing = FastOutSlowInEasing)
+            ) { value, _ -> offsetState.floatValue = value }
 
-            // 2) 换内容。此刻旧内容已经出屏，新内容也从屏外的起点出发，
-            //    这一帧的「换」发生在屏幕外，看不见；新内容随后整页滑入 + 渐显
+            // apply 与复位写成同一帧：内容换成新筛选、位移回到 0，屏幕上不会闪一下旧内容
             apply()
-            offset.floatValue = -direction * pagePx
-            fade.floatValue = SWAP_FADE
-            coroutineScope {
-                launch {
-                    animate(
-                        offset.floatValue, 0f,
-                        animationSpec = tween(IN_DURATION_MS, easing = FastOutSlowInEasing)
-                    ) { value, _ -> offset.floatValue = value }
-                }
-                launch {
-                    // 透明度先停在 0.3：等新内容真的渲染出来再升到 1。
-                    // 新筛选的数据要现拉时，这一步能避免「转圈渐显完 → 真列表整页硬弹出来」
-                    withTimeoutOrNull(CONTENT_WAIT_MS) { signal.await() }
-                    animate(
-                        fade.floatValue, 1f,
-                        animationSpec = tween(IN_DURATION_MS, easing = FastOutSlowInEasing)
-                    ) { value, _ -> fade.floatValue = value }
-                }
-            }
+            offsetState.floatValue = 0f
         }
         animJob = job
         return job
     }
 
-    /**
-     * 新筛选的内容已经渲染出来了（缓存命中那一帧、或请求返回/失败时）：放行滑入后的渐显。
-     * 每次 [switchTo] 后都必须有人调用，否则透明度只能等兜底超时才升起来。
-     */
-    fun contentReady() {
-        contentSignal?.complete(Unit)
-    }
-
-    /** 跟手时的透明度：越推越淡，最多淡到 [DRAG_FADE_MIN] */
-    private fun dragFade(px: Float): Float =
-        (1f - abs(px) / (travelPx * 4f)).coerceIn(DRAG_FADE_MIN, 1f)
-
-    /** 距离 / 速度 = 时长，再夹在 120–240ms 之间 */
-    private fun outDuration(distancePx: Float, velocityPxPerSec: Float): Int {
-        val speed = abs(velocityPxPerSec).coerceIn(MIN_EXIT_VELOCITY, MAX_EXIT_VELOCITY)
-        return (distancePx / speed * 1000f).toInt().coerceIn(OUT_MIN_MS, OUT_MAX_MS)
-    }
-
-    /** 翻页距离之外按 [DRAG_RESISTANCE] 的速率继续跟手，避免手指一划就把内容甩到天边 */
-    private fun withResistance(px: Float): Float = when {
-        px > travelPx -> travelPx + (px - travelPx) * DRAG_RESISTANCE
-        px < -travelPx -> -travelPx + (px + travelPx) * DRAG_RESISTANCE
-        else -> px
+    /** 距离 / 速度 = 时长，再夹在 200–340ms 之间 */
+    private fun pageDuration(distancePx: Float, velocityPxPerSec: Float): Int {
+        val speed = abs(velocityPxPerSec).coerceIn(MIN_SWIPE_VELOCITY, MAX_SWIPE_VELOCITY)
+        return (distancePx / speed * 1000f).toInt().coerceIn(PAGE_MIN_MS, PAGE_MAX_MS)
     }
 }
 
 /**
- * 跟手横滑手势：位移与速度交给 [transition]，松手按阈值/边界决定切页还是弹回。
+ * 翻页容器：当前页跟手平移，左右相邻页紧贴其边缘一起移动。
  *
- * 手势节点只在 transition / 阈值变化时重启，所以 [onSwipe] 捕获的是首次组合的那个闭包——
- * 里面要读的必须是 state 委托（或 remember 的常量），调用时才取值；
+ * [prev] / [next] 传 null 表示该方向已是序列首尾（滑到底就是边界，不渲染那一页）。
+ * 相邻页只在翻页过程中参与渲染（静止时不组合、不加载它们的封面）。
+ *
+ * 手势 modifier 挂在 [modifier] 上（由调用方传入 `Modifier.filterSwipe(...)`）。
+ */
+@Composable
+fun FilterPager(
+    transition: FilterTransition,
+    modifier: Modifier = Modifier,
+    prev: (@Composable () -> Unit)? = null,
+    next: (@Composable () -> Unit)? = null,
+    current: @Composable () -> Unit
+) {
+    BoxWithConstraints(modifier) {
+        // 页宽按容器实测宽度，不用屏宽：容器可能带内缩/留白，用屏宽算两页之间会露缝
+        val pageWidth = constraints.maxWidth.toFloat()
+        SideEffect { transition.pageWidthPx = pageWidth }
+        val engaged = transition.engaged
+        Box(Modifier.fillMaxSize()) {
+            if (engaged) {
+                prev?.let { page ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { translationX = transition.offset - pageWidth }
+                    ) { page() }
+                }
+                next?.let { page ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { translationX = transition.offset + pageWidth }
+                    ) { page() }
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { translationX = transition.offset }
+            ) { current() }
+        }
+    }
+}
+
+/**
+ * 跟手横滑手势：位移与速度交给 [transition]，松手按阈值/边界决定翻页还是弹回。
+ *
+ * 手势节点只在 transition / 阈值变化时重启，所以 [onTakeOver] 与 [onSwipe] 捕获的是首次组合的
+ * 那个闭包——里面要读的必须是 state 委托（或 remember 的常量），调用时才取值；
  * 若要捕获普通局部变量，得先包一层 rememberUpdatedState。
  *
- * @param thresholdPx 触发切换的位移阈值
- * @param onSwipe 触发切换，参数为「是否向后」（手指向左滑）与松手速度（px/s）；
- *   返回 false = 已在序列首尾没得切，此时内容弹回。
+ * @param thresholdPx 触发翻页的位移阈值
+ * @param onTakeOver 手指按下的那一刻（横滑固定按某个序列翻页时，用它把相邻页的序列切回来）
+ * @param onSwipe 触发翻页，参数为「是否向后」（手指向左滑）与松手速度（px/s）；
+ *   返回 false = 已在序列首尾没得翻，此时内容弹回。
  */
 fun Modifier.filterSwipe(
     transition: FilterTransition,
     thresholdPx: Float,
+    onTakeOver: () -> Unit = {},
     onSwipe: (forward: Boolean, velocity: Float) -> Boolean
 ): Modifier = pointerInput(transition, thresholdPx) {
     val tracker = VelocityTracker()
@@ -254,6 +199,7 @@ fun Modifier.filterSwipe(
             tracker.resetTracking()
             dragDistance = 0f
             transition.takeOver()
+            onTakeOver()
         },
         onHorizontalDrag = { change, amount ->
             tracker.addPosition(change.uptimeMillis, change.position)
@@ -264,7 +210,7 @@ fun Modifier.filterSwipe(
             val distance = dragDistance
             val velocity = tracker.calculateVelocity().x
             dragDistance = 0f
-            // 没切页（未达阈值或已在序列首尾）就把跟手的位移弹回去
+            // 没翻页（未达阈值或已在序列首尾）就把跟手的位移弹回去
             if (abs(distance) < thresholdPx || !onSwipe(distance < 0f, velocity)) {
                 transition.settleBack()
             }
@@ -279,9 +225,5 @@ fun Modifier.filterSwipe(
 @Composable
 fun rememberFilterTransition(): FilterTransition {
     val scope = rememberCoroutineScope()
-    val widthDp = LocalConfiguration.current.screenWidthDp
-    val (travelPx, pagePx) = with(LocalDensity.current) {
-        (widthDp * SLIDE_SCREEN_FRACTION).dp.toPx() to (widthDp * PAGE_SCREEN_FRACTION).dp.toPx()
-    }
-    return remember(scope, travelPx, pagePx) { FilterTransition(travelPx, pagePx, scope) }
+    return remember(scope) { FilterTransition(scope) }
 }

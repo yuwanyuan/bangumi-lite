@@ -42,10 +42,13 @@ fun CalendarScreen(
 ) {
     val app = App.INSTANCE
     var uiState by remember { mutableStateOf(CalendarUiState()) }
-    // 左右滑动切星期，与浏览页/收藏页共用同一套过渡（滑出旧的一屏 → 换星期 → 从另一侧滑入并渐显）。
-    // 动画由过渡自己管，屏幕侧不再持 Job：手指接管或下一次切换会把它取消
+    // 左右滑动切星期，与浏览页/收藏页共用同一套翻页过渡（相邻两天各占一屏，紧贴当前页边缘一起移动）。
+    // 动画由过渡自己管，屏幕侧不持 Job：手指接管或下一次翻页会把它取消
     val filterTransition = rememberFilterTransition()
-    val listState = rememberLazyListState()
+    // 每天一个滚动状态：翻页时相邻天各占一屏，静止后同一天还会作为当前页回来，
+    // 共用一个状态翻页前后滚动位置才连贯（各建一个会先跳回顶部再恢复）
+    val dayListStates = remember { mutableMapOf<Int, LazyListState>() }
+    fun listStateOf(day: Int): LazyListState = dayListStates.getOrPut(day) { LazyListState() }
     // 切换中的目标：过渡没走完时 uiState 还是旧的一天，下一次滑动要相对它算方向
     var pendingDay by remember { mutableStateOf<Int?>(null) }
     val swipeThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
@@ -61,11 +64,9 @@ fun CalendarScreen(
         val forward = index > from
         pendingDay = index
         filterTransition.switchTo(forward, velocity) {
-            // 每天的列表都在同一个 LazyColumn 里，换天要显式回到顶部
-            listState.scrollToItem(0)
+            // 整周数据都在内存里，换天不需要等加载：这一帧就换上新一天。
+            // 滚动位置由 listStateOf 按天持有，不需要在这里回顶
             uiState = uiState.copy(selectedDay = index)
-            // 整周数据都在内存里，换天不需要等加载：这一帧就放行渐显
-            filterTransition.contentReady()
         }.invokeOnCompletion {
             if (pendingDay == index) pendingDay = null
         }
@@ -143,12 +144,12 @@ fun CalendarScreen(
                 uiState = uiState,
                 onDaySelected = { index -> selectDay(index) },
                 onSubjectClick = onSubjectClick,
-                listState = listState,
+                listStateOf = ::listStateOf,
+                filterTransition = filterTransition,
                 // 手势与过渡只挂在放送列表区域：顶部星期 tab 要保留自己的横向滚动
                 contentModifier = Modifier
                     .fillMaxSize()
                     .then(daySwipeModifier)
-                    .then(filterTransition.modifier)
             )
         }
         }
@@ -160,7 +161,8 @@ private fun CalendarContent(
     uiState: CalendarUiState,
     onDaySelected: (Int) -> Unit,
     onSubjectClick: (Int) -> Unit,
-    listState: LazyListState,
+    listStateOf: (Int) -> LazyListState,
+    filterTransition: FilterTransition,
     contentModifier: Modifier = Modifier
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -182,31 +184,50 @@ private fun CalendarContent(
             }
         }
 
-        val currentDay = uiState.data.getOrNull(uiState.selectedDay)
-
-        Box(modifier = contentModifier) {
-            when {
-                currentDay == null -> {}
-                currentDay.items.isEmpty() -> EmptyView("今日没有放送")
-                else -> {
-                    // 懒加载：一天几十个条目，非 Lazy 的 Column 会一次性组合全部条目、
-                    // 所有封面同时挤进图片加载队列（每主机并发有限），表现为图片长时间出不来
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        items(currentDay.items, key = { it.id }) { subject ->
-                            CalendarItem(
-                                subject = subject,
-                                onClick = { onSubjectClick(subject.id) }
-                            )
-                        }
-                    }
-                }
+        FilterPager(
+            transition = filterTransition,
+            modifier = contentModifier,
+            // 相邻两天各一屏：整周数据都在内存里，横滑时左右两页紧跟手指露出来。
+            // 滚动状态按天取自 listStateOf，翻页落定后跟作为当前页时是同一份
+            prev = uiState.data.getOrNull(uiState.selectedDay - 1)?.let { day ->
+                { key(day) { CalendarDayList(day, onSubjectClick, listStateOf(uiState.selectedDay - 1)) } }
+            },
+            next = uiState.data.getOrNull(uiState.selectedDay + 1)?.let { day ->
+                { key(day) { CalendarDayList(day, onSubjectClick, listStateOf(uiState.selectedDay + 1)) } }
             }
+        ) {
+            val currentDay = uiState.data.getOrNull(uiState.selectedDay)
+            if (currentDay != null) {
+                CalendarDayList(currentDay, onSubjectClick, listStateOf(uiState.selectedDay))
+            }
+        }
+    }
+}
+
+@Composable
+private fun CalendarDayList(
+    day: CalendarDay,
+    onSubjectClick: (Int) -> Unit,
+    state: LazyListState
+) {
+    if (day.items.isEmpty()) {
+        EmptyView("今日没有放送")
+        return
+    }
+    // 懒加载：一天几十个条目，非 Lazy 的 Column 会一次性组合全部条目、
+    // 所有封面同时挤进图片加载队列（每主机并发有限），表现为图片长时间出不来
+    LazyColumn(
+        state = state,
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        items(day.items, key = { it.id }) { subject ->
+            CalendarItem(
+                subject = subject,
+                onClick = { onSubjectClick(subject.id) }
+            )
         }
     }
 }

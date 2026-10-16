@@ -1,17 +1,21 @@
 package com.bangumi.ywylite.ui.screen
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.PagedSubject
@@ -243,7 +247,7 @@ fun SearchScreen(
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         items(uiState.results, key = { it.id }) { subject ->
-                            SubjectListItem(
+                            SearchResultItem(
                                 subject = subject,
                                 onClick = { onSubjectClick(subject.id) },
                                 // 跨类型混排时标注条目类型，便于区分动画/书籍/游戏等
@@ -280,5 +284,35 @@ fun SearchScreen(
                 }
             }
         }
+    }
+}
+
+/** 搜索结果行：与收藏页/每日放送同一套毛玻璃（有壁纸时采样背后壁纸做模糊，无壁纸时只裁圆角） */
+@Composable
+private fun SearchResultItem(
+    subject: SubjectSmall,
+    onClick: () -> Unit,
+    typeLabel: String? = null
+) {
+    val darkTheme = isSystemInDarkTheme()
+    val shape = RoundedCornerShape(18.dp)
+    val background = if (darkTheme) {
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+    } else {
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(background, shape)
+            .then(wallpaperGlassPanel(darkTheme, shape))
+    ) {
+        SubjectListItem(
+            subject = subject,
+            onClick = onClick,
+            typeLabel = typeLabel,
+            transparentContainer = true
+        )
     }
 }
