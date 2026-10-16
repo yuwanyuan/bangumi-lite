@@ -24,10 +24,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
-/** 过渡节奏：跟手弹回 200ms、滑出 80–180ms（松手越快越短）、滑入渐显 220ms */
-private const val OUT_MIN_MS = 80
-private const val OUT_MAX_MS = 180
-private const val IN_DURATION_MS = 220
+/** 过渡节奏：跟手弹回 200ms、滑出 120–240ms（松手越快越短）、滑入渐显 300ms */
+private const val OUT_MIN_MS = 120
+private const val OUT_MAX_MS = 240
+private const val IN_DURATION_MS = 300
 private const val SETTLE_DURATION_MS = 200
 
 /**
@@ -37,9 +37,16 @@ private const val SETTLE_DURATION_MS = 200
  */
 private const val CONTENT_WAIT_MS = 1500L
 
-/** 跟手翻页距离（也是新内容滑入的起点）与旧内容滑出距离，都按屏宽比 */
+/**
+ * 跟手阶段 1:1 能拖到的距离（再往外按阻尼走），与整页滑出/滑入距离，都按屏宽比。
+ *
+ * [PAGE_SCREEN_FRACTION] 必须大于 1：滑出终点和滑入起点都得真的离开屏幕。
+ * 换页时新旧内容是同一个容器（不可能同时渲染两份），所以那一刻的内容位置只要还有一部分
+ * 露在屏内，就会被看成「瞬移」——用户反馈的「新的一页突然出现在屏幕中间」就是这么来的。
+ * 两头都出屏，换页发生在屏幕外，新内容才是从边缘完整滑进来的。
+ */
 private const val SLIDE_SCREEN_FRACTION = 0.28f
-private const val EXIT_SCREEN_FRACTION = 0.58f
+private const val PAGE_SCREEN_FRACTION = 1.05f
 
 /** 内容透明度：跟手时最低 0.7；换页时两边同为 0.3，接起来像一次淡出淡入 */
 private const val DRAG_FADE_MIN = 0.7f
@@ -68,7 +75,7 @@ private const val MAX_EXIT_VELOCITY = 4000f
  */
 class FilterTransition internal constructor(
     private val travelPx: Float,
-    private val exitPx: Float,
+    private val pagePx: Float,
     private val scope: CoroutineScope
 ) {
     private val offset = mutableFloatStateOf(0f)
@@ -89,14 +96,13 @@ class FilterTransition internal constructor(
 
     /**
      * 手指按下接管：取消进行中的动画（否则动画和手指会同时写位移，互相打架），
-     * 并把当前停住的位置记为本次跟手的起点。
-     * 起点夹在 ±翻页距离内：万一手是在「滑出中途」按下的（内容已经推出屏外），
-     * 也从屏幕边缘附近接着拖，而不是沿着屏外继续往外拉。
+     * 并把当前停住的位置记为本次跟手的起点——不管是滑到一半还是刚从屏外滑回来，
+     * 内容都从它此刻所在的位置继续被拖，不会跳一下。夹 ±整页距离只是防御越界值。
      */
     fun takeOver() {
         animJob?.cancel()
         animJob = null
-        dragBase = offset.floatValue.coerceIn(-travelPx, travelPx)
+        dragBase = offset.floatValue.coerceIn(-pagePx, pagePx)
     }
 
     /** 手势跟手：内容 1:1 跟手指走，超过翻页距离后加阻尼；同时轻微淡出作为翻页反馈 */
@@ -129,11 +135,13 @@ class FilterTransition internal constructor(
     }
 
     /**
-     * 切换筛选。
+     * 切换筛选。两个关键点：
      *
-     * 关键点是「不停顿」：滑出的终点取真正离开屏幕的距离，而不是跟手能达到的那点距离——
-     * 否则正常力度的一划松手时内容已经贴在跟手终点上，滑出动画无事可做，中间就是一段空白停顿。
-     * 时长再按松手速度算，快划干脆利落、慢放平稳收尾，动作和手指接得上。
+     * 1. 不能停：滑出的终点要真正离开屏幕，而不是跟手能达到的那点距离——否则正常力度一划松手时
+     *    内容已经贴在跟手终点上，滑出动画无事可做，中间就是一段空白停顿；时长再按松手速度算，
+     *    快划干脆、慢放平稳，动作和手指接得上。
+     * 2. 换页要发生在屏幕外：新旧内容共用一个容器，滑出终点与滑入起点都在屏外，
+     *    这一帧的「换」才看不见；否则新内容会像是「突然出现在屏幕中间」，再挪那么一小段。
      *
      * @param forward 沿序列向后（手势向左滑）：旧内容向左推出，新内容从右侧进入。
      * @param velocityPxPerSec 松手瞬间的手指速度，点 tab/chip 触发时传 0。
@@ -150,9 +158,10 @@ class FilterTransition internal constructor(
         contentSignal = signal
         val direction = if (forward) -1f else 1f
         val job = scope.launch {
-            // 1) 滑出：从当前位置继续往前推，且终点一定比当前位置更靠外（绝不往回走）
+            // 1) 滑出：从当前位置继续往前推，一路推到屏幕外
+            //    （终点一定比当前位置更靠外，绝不往回走；否则松手时动画没有位移可走，中间就是一段停顿）
             val from = offset.floatValue
-            val target = direction * maxOf(exitPx, abs(from) + travelPx * 0.35f)
+            val target = direction * maxOf(pagePx, abs(from) + travelPx * 0.35f)
             val outMs = outDuration(abs(target - from), velocityPxPerSec)
             coroutineScope {
                 launch {
@@ -169,9 +178,10 @@ class FilterTransition internal constructor(
                 }
             }
 
-            // 2) 换内容：位移立刻起跑，别被数据等待拖住
+            // 2) 换内容。此刻旧内容已经出屏，新内容也从屏外的起点出发，
+            //    这一帧的「换」发生在屏幕外，看不见；新内容随后整页滑入 + 渐显
             apply()
-            offset.floatValue = -direction * travelPx
+            offset.floatValue = -direction * pagePx
             fade.floatValue = SWAP_FADE
             coroutineScope {
                 launch {
@@ -207,7 +217,7 @@ class FilterTransition internal constructor(
     private fun dragFade(px: Float): Float =
         (1f - abs(px) / (travelPx * 4f)).coerceIn(DRAG_FADE_MIN, 1f)
 
-    /** 距离 / 速度 = 时长，再夹在 80–180ms 之间 */
+    /** 距离 / 速度 = 时长，再夹在 120–240ms 之间 */
     private fun outDuration(distancePx: Float, velocityPxPerSec: Float): Int {
         val speed = abs(velocityPxPerSec).coerceIn(MIN_EXIT_VELOCITY, MAX_EXIT_VELOCITY)
         return (distancePx / speed * 1000f).toInt().coerceIn(OUT_MIN_MS, OUT_MAX_MS)
@@ -270,8 +280,8 @@ fun Modifier.filterSwipe(
 fun rememberFilterTransition(): FilterTransition {
     val scope = rememberCoroutineScope()
     val widthDp = LocalConfiguration.current.screenWidthDp
-    val (travelPx, exitPx) = with(LocalDensity.current) {
-        (widthDp * SLIDE_SCREEN_FRACTION).dp.toPx() to (widthDp * EXIT_SCREEN_FRACTION).dp.toPx()
+    val (travelPx, pagePx) = with(LocalDensity.current) {
+        (widthDp * SLIDE_SCREEN_FRACTION).dp.toPx() to (widthDp * PAGE_SCREEN_FRACTION).dp.toPx()
     }
-    return remember(scope, travelPx, exitPx) { FilterTransition(travelPx, exitPx, scope) }
+    return remember(scope, travelPx, pagePx) { FilterTransition(travelPx, pagePx, scope) }
 }
