@@ -26,6 +26,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Authenticator
@@ -1061,6 +1062,22 @@ class BangumiApi(private val context: Context) {
         }.getOrNull()
     }
 
+    /** 标题反查：条目链接被网页整段扣掉时，只能拿正文里的标题去搜索接口换 ID */
+    private suspend fun searchSubjectIdByTitle(title: String): Int = runCatching {
+        val response = webClient.get("/search/subject/${java.net.URLEncoder.encode(title, "UTF-8")}") {
+            headers { append(FORCE_NETWORK_HEADER, "1") }
+            url { parameters.append("type", "2") }
+        }
+        val list = json.parseToJsonElement(response.bodyAsText()).jsonObject["list"]
+            ?.jsonArray ?: return@runCatching 0
+        val exact = list.firstOrNull { element ->
+            val obj = element.jsonObject
+            obj["name"]?.jsonPrimitive?.content == title ||
+                obj["name_cn"]?.jsonPrimitive?.content == title
+        } ?: return@runCatching 0
+        exact.jsonObject["id"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+    }.getOrDefault(0)
+
     /**
      * 网页里「有条目 ID 但缺封面或标题」的条目用官方接口补齐。
      *
@@ -1079,21 +1096,52 @@ class BangumiApi(private val context: Context) {
             if (subjectId > 0) item.copy(subjectId = subjectId) else item
         }
 
-        // 缺中文名也要补：卡片被扣掉的条目网页只留原名，译名只有接口里有
-        val needIds = resolved.filter {
-            it.subjectId > 0 &&
-                (it.subjectImage.isEmpty() || it.subjectName.isEmpty() || it.subjectNameCn.isEmpty())
+        // 条目链接与章节链接一起被扣掉的动态（R18 的「看过 xxx」）：网页里只剩标题文本，
+        // 用标题去搜索接口反查条目 ID。查不到就保持无 ID（不可点）
+        val withIds = resolved.map { item ->
+            if (item.subjectId > 0 || item.isStatus) return@map item
+            val title = item.subjectNameCn.ifEmpty { item.subjectName }.trim()
+            if (title.isEmpty()) return@map item
+            if (item.batchSuffix.isNotEmpty()) {
+                // 批量动态（看过 A、B 2 部番组）没有单个条目 ID，逐段查译名替换；
+                // 查不到的那段保留原文，别把用户实际看过的名字拼没
+                val parts = title.split("、")
+                if (parts.size > 1) {
+                    val localized = parts.map { part ->
+                        val id = searchSubjectIdByTitle(part)
+                        val cn = if (id > 0) fetchSubjectBrief(id, needCn = true)?.nameCn?.takeIf { it.isNotEmpty() } else null
+                        cn ?: part
+                    }.joinToString("、")
+                    return@map if (localized != title) item.copy(subjectNameCn = localized, subjectName = localized) else item
+                }
+            }
+            val subjectId = searchSubjectIdByTitle(title)
+            if (subjectId > 0) item.copy(subjectId = subjectId) else item
+        }
+
+        // 缺中文名也要补。网页的中文名只来自 data 属性，卡片被扣掉时拿不到；更常见的是
+        // 网页干脆把原名填进中文名位置（两字段相同），译名只有接口里有
+        val needIds = withIds.filter { item ->
+            item.subjectId > 0 && (
+                item.subjectImage.isEmpty() ||
+                    item.subjectName.isEmpty() ||
+                    item.subjectNameCn.isEmpty() ||
+                    item.subjectNameCn == item.subjectName
+                )
         }.map { it.subjectId }.distinct()
-        if (needIds.isEmpty()) return resolved
+        if (needIds.isEmpty()) return withIds
 
         val briefs = needIds.map { id ->
             id to fetchSubjectBrief(id, needCn = true)
         }.toMap()
 
-        return resolved.map { item ->
+        return withIds.map { item ->
             val brief = briefs[item.subjectId] ?: return@map item
+            val apiCn = brief.nameCn.takeIf { brief.nameCnFetched }
             item.copy(
-                subjectNameCn = item.subjectNameCn.ifEmpty { brief.nameCn },
+                // 接口的中文名是权威：网页那侧的中文名只来自 data 属性，被扣卡片时拿不到，
+                // 此时页面兜底名字可能是原名（日文），优先用接口译名
+                subjectNameCn = apiCn ?: item.subjectNameCn,
                 subjectName = item.subjectName.ifEmpty { brief.name },
                 subjectImage = item.subjectImage.ifEmpty { brief.cover }
             )
