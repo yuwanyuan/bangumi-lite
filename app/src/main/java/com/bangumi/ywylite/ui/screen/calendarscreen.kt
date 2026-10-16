@@ -64,7 +64,7 @@ fun CalendarScreen(
         pendingDay = index
         switchJob?.cancel()
         switchJob = scope.launch {
-            filterTransition.run(forward) {
+            filterTransition.switchTo(forward) {
                 // 每天的列表都在同一个 LazyColumn 里，换天要显式回到顶部
                 listState.scrollToItem(0)
                 uiState = uiState.copy(selectedDay = index)
@@ -73,18 +73,43 @@ fun CalendarScreen(
         }
     }
 
+    /** 横滑一次：下一天 / 上一天。返回 false = 已在首尾没切，调用方要把跟手的位移弹回去 */
+    fun swipeStep(forward: Boolean): Boolean {
+        val from = pendingDay ?: uiState.selectedDay
+        val target = from + if (forward) 1 else -1
+        if (target !in uiState.data.indices) return false
+        selectDay(target)
+        return true
+    }
+
     val daySwipeModifier = Modifier.pointerInput(uiState.selectedDay, uiState.data.size, swipeThresholdPx) {
         var dragDistance = 0f
+        var dragging = false
         detectHorizontalDragGestures(
-            onHorizontalDrag = { _, amount -> dragDistance += amount },
-            onDragEnd = {
-                if (kotlin.math.abs(dragDistance) >= swipeThresholdPx) {
-                    val from = pendingDay ?: uiState.selectedDay
-                    selectDay(from + if (dragDistance < 0f) 1 else -1)
+            // 跟手：手势期间内容就按手指位移走，松手才决定切天还是弹回
+            onHorizontalDrag = { _, amount ->
+                if (!dragging) {
+                    // 上一次切换可能还在跑动画：手指按下就接管，否则两边一起写位移会互相打架
+                    dragging = true
+                    switchJob?.cancel()
                 }
-                dragDistance = 0f
+                dragDistance += amount
+                filterTransition.drag(dragDistance)
             },
-            onDragCancel = { dragDistance = 0f }
+            onDragEnd = {
+                val distance = dragDistance
+                dragDistance = 0f
+                dragging = false
+                // 没切（未达阈值或已在首尾）就把跟手的位移弹回去
+                if (kotlin.math.abs(distance) < swipeThresholdPx || !swipeStep(forward = distance < 0f)) {
+                    filterTransition.settleBack()
+                }
+            },
+            onDragCancel = {
+                dragDistance = 0f
+                dragging = false
+                filterTransition.settleBack()
+            }
         )
     }
 

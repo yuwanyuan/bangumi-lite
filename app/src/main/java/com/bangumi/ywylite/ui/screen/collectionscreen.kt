@@ -124,29 +124,29 @@ fun CollectionScreen(
     val waterfall by app.settings.collectionWaterfall.collectAsState(initial = false)
     val listState = rememberLazyListState()
     val gridState = rememberLazyStaggeredGridState()
-    // 切换筛选时的内容过渡（滑出旧内容 → 换筛选 → 从另一侧滑入）
+    // 切换筛选时的内容过渡（跟手拖动 → 滑出旧内容 → 换筛选 → 从另一侧滑入）
     val filterTransition = rememberFilterTransition()
     var switchJob by remember { mutableStateOf<Job?>(null) }
-    // 横滑序列：全部 → 看过 → 想看。其余状态（在看/搁置/抛弃）不在序列里，
-    // 由它们起滑时按标签顺序取方向上相邻的序列项，越界就原地不动
-    val swipeCollectionTypes = listOf<Int?>(null, 2, 1)
-    fun swipeTarget(from: Int?, forward: Boolean): Int? {
-        val fromIndex = collectionTypes.indexOfFirst { it.first == from }
-        val cycleIndex = swipeCollectionTypes.indexOf(from)
-        if (cycleIndex >= 0) {
-            return swipeCollectionTypes[(cycleIndex + if (forward) 1 else -1).coerceIn(0, swipeCollectionTypes.lastIndex)]
+    // 每个筛选的第一页缓存 + 相邻筛选预取：滑动切换不再重新请求
+    val filterCache = remember {
+        FilterPageCache<Pair<Int?, Int?>, UserCollection>(scope) { key, offset ->
+            val name = username ?: throw IllegalStateException("未登录")
+            val page = app.api.getUserCollections(
+                name,
+                subjectType = key.second,
+                collectionType = key.first,
+                offset = offset
+            )
+            FilterPage(page.data, page.total)
         }
-        val candidates = swipeCollectionTypes.filter { target ->
-            val index = collectionTypes.indexOfFirst { it.first == target }
-            if (forward) index > fromIndex else index < fromIndex
-        }
-        return if (forward) candidates.firstOrNull() else candidates.lastOrNull()
     }
     // 切换中的目标筛选：过渡还没走完时 uiState 仍是旧筛选，
     // 下一次滑动要相对「正在切过去的那一屏」算方向，否则中间那次滑动会被当成原地不动丢掉
     var pendingFilter by remember { mutableStateOf<Pair<Int?, Int?>?>(null) }
+    fun currentFilter(): Pair<Int?, Int?> =
+        pendingFilter ?: (uiState.selectedType to uiState.selectedSubjectType)
     fun selectCollectionType(type: Int?) {
-        val from = pendingFilter ?: (uiState.selectedType to uiState.selectedSubjectType)
+        val from = currentFilter()
         if (type == from.first) return
         // 方向按 tab 顺序算：目标位次在更后面 = 向左切换（与左滑同一个方向）
         val forward = collectionTypes.indexOfFirst { it.first == type } >
@@ -154,7 +154,7 @@ fun CollectionScreen(
         pendingFilter = type to from.second
         switchJob?.cancel()
         switchJob = scope.launch {
-            filterTransition.run(forward) {
+            filterTransition.switchTo(forward) {
                 if (waterfall) gridState.scrollToItem(0) else listState.scrollToItem(0)
                 uiState = uiState.copy(selectedType = type)
             }
@@ -162,34 +162,68 @@ fun CollectionScreen(
         }
     }
     fun selectSubjectType(type: Int?) {
-        val from = pendingFilter ?: (uiState.selectedType to uiState.selectedSubjectType)
+        val from = currentFilter()
         if (type == from.second) return
         val forward = subjectTypeFilters.indexOfFirst { it.first == type } >
             subjectTypeFilters.indexOfFirst { it.first == from.second }
         pendingFilter = from.first to type
         switchJob?.cancel()
         switchJob = scope.launch {
-            filterTransition.run(forward) {
+            filterTransition.switchTo(forward) {
                 if (waterfall) gridState.scrollToItem(0) else listState.scrollToItem(0)
                 uiState = uiState.copy(selectedSubjectType = type)
             }
             if (pendingFilter == (from.first to type)) pendingFilter = null
         }
     }
+    /** 横滑一次：序列就是 tab 顺序（全部 → 在看 → 看过 → 想看 → 搁置 → 抛弃），首尾不越界。
+     *  返回 false = 没切（已在首尾），调用方要把跟手的位移弹回去 */
+    fun swipeStep(forward: Boolean): Boolean {
+        val from = currentFilter()
+        val index = collectionTypes.indexOfFirst { it.first == from.first }
+        if (index < 0) return false
+        val target = collectionTypes[(index + if (forward) 1 else -1).coerceIn(0, collectionTypes.lastIndex)]
+        if (target.first == from.first) return false
+        selectCollectionType(target.first)
+        return true
+    }
+    /** 左右相邻筛选（预取用） */
+    fun neighbourFilters(type: Int?, subjectType: Int?): List<Pair<Int?, Int?>> {
+        val index = collectionTypes.indexOfFirst { it.first == type }
+        if (index < 0) return emptyList()
+        return listOfNotNull(collectionTypes.getOrNull(index - 1), collectionTypes.getOrNull(index + 1))
+            .map { it.first to subjectType }
+    }
     // 阈值按 dp 换算：裸像素在不同密度屏上手感差一倍
     val swipeThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
     val collectionSwipeModifier = Modifier.pointerInput(uiState.selectedType, waterfall, swipeThresholdPx) {
         var dragDistance = 0f
+        var dragging = false
         detectHorizontalDragGestures(
-            onHorizontalDrag = { _, amount -> dragDistance += amount },
-            onDragEnd = {
-                if (kotlin.math.abs(dragDistance) >= swipeThresholdPx) {
-                    val targetType = swipeTarget(uiState.selectedType, forward = dragDistance < 0f)
-                    if (targetType != uiState.selectedType) selectCollectionType(targetType)
+            // 跟手：手势期间内容就按手指位移走，松手才决定切页还是弹回
+            onHorizontalDrag = { _, amount ->
+                if (!dragging) {
+                    // 上一次切换可能还在跑动画：手指按下就接管，否则两边一起写位移会互相打架
+                    dragging = true
+                    switchJob?.cancel()
                 }
-                dragDistance = 0f
+                dragDistance += amount
+                filterTransition.drag(dragDistance)
             },
-            onDragCancel = { dragDistance = 0f }
+            onDragEnd = {
+                val distance = dragDistance
+                dragDistance = 0f
+                dragging = false
+                // 没切页（未达阈值或已在首尾）就把跟手的位移弹回去
+                if (kotlin.math.abs(distance) < swipeThresholdPx || !swipeStep(forward = distance < 0f)) {
+                    filterTransition.settleBack()
+                }
+            },
+            onDragCancel = {
+                dragDistance = 0f
+                dragging = false
+                filterTransition.settleBack()
+            }
         )
     }
 
@@ -231,6 +265,11 @@ fun CollectionScreen(
                     hasMore = result.data.size < result.total,
                     loadMoreError = false
                 )
+                // 刷新结果写回筛选缓存：之后滑回这一屏看到的是刚刷过的数据
+                filterCache.store(
+                    filterType to filterSubjectType,
+                    FilterPage(result.data.distinctBy { it.subjectId }, result.total)
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -251,31 +290,48 @@ fun CollectionScreen(
             uiState = uiState.copy(loading = false)
             return@LaunchedEffect
         }
+        val key = uiState.selectedType to uiState.selectedSubjectType
+        fun prefetchNeighbours() = filterCache.prefetch(neighbourFilters(key.first, key.second))
         // 首次拿到用户名时结算缓存：命中同账号 → 跳过首拉读缓存；无缓存/换号 → 正常拉取
         val restored = restoredUsername
         if (restored != null) {
             restoredUsername = null
-            if (restored == username) return@LaunchedEffect
+            if (restored == username) {
+                // 进程缓存可用：灌进筛选缓存并预取邻居，之后左右滑动都是现成的
+                filterCache.store(key, FilterPage(uiState.data, uiState.total))
+                prefetchNeighbours()
+                return@LaunchedEffect
+            }
         }
-        val currentUsername = username!!
+        // 切回已经拉过的筛选：直接给缓存，不再请求（下拉刷新才是手动更新数据的方式）
+        filterCache.peek(key)?.let { entry ->
+            uiState = uiState.copy(
+                loading = false,
+                error = null,
+                data = entry.page.data,
+                total = entry.page.total,
+                offset = entry.offset,
+                hasMore = entry.hasMore,
+                loadMoreError = false
+            )
+            prefetchNeighbours()
+            return@LaunchedEffect
+        }
         // hasMore 必须一并清掉：否则列表被换成加载屏时 layoutInfo 为空，
         // nearEnd 会误判成「到底」，与这次首拉并发再取一遍 offset=0，
         // 之后 offset 多加一页 → 中间整页条目被跳过
         uiState = uiState.copy(loading = true, offset = 0, hasMore = false, error = null, loadMoreError = false)
         try {
-            val result = app.api.getUserCollections(
-                currentUsername,
-                subjectType = uiState.selectedSubjectType,
-                collectionType = uiState.selectedType,
-                offset = 0
-            )
+            // firstPage 内部按筛选去重：预取已经在拉的话这里直接等它，不会重复请求
+            val entry = filterCache.firstPage(key)
             uiState = uiState.copy(
                 loading = false,
-                data = result.data,
-                total = result.total,
-                offset = result.data.size,
-                hasMore = result.data.size < result.total
+                data = entry.page.data,
+                total = entry.page.total,
+                offset = entry.offset,
+                hasMore = entry.hasMore
             )
+            prefetchNeighbours()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -315,8 +371,14 @@ fun CollectionScreen(
             uiState = if (result.data.isEmpty()) {
                 uiState.copy(hasMore = false, loadMoreError = false)
             } else {
+                val merged = (uiState.data + result.data).distinctBy { it.subjectId }
+                // 追加的页也写回缓存，滑走再滑回来时这一段不用重新拉
+                filterCache.store(
+                    uiState.selectedType to uiState.selectedSubjectType,
+                    FilterPage(merged, uiState.total)
+                )
                 uiState.copy(
-                    data = (uiState.data + result.data).distinctBy { it.subjectId },
+                    data = merged,
                     offset = uiState.offset + result.data.size,
                     hasMore = (uiState.offset + result.data.size) < uiState.total,
                     loadMoreError = false
