@@ -2,8 +2,6 @@ package com.bangumi.ywylite.ui.screen
 
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
@@ -28,7 +26,6 @@ import com.bangumi.ywylite.data.model.PagedSubject
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 data class ExploreUiState(
@@ -111,9 +108,9 @@ fun ExploreScreen(
     var uiState by remember { mutableStateOf(cachedExploreState ?: ExploreUiState()) }
     var skipAutoLoad by remember { mutableStateOf(cachedExploreState != null) }
     val gridState = rememberLazyStaggeredGridState()
-    // 切换筛选时的内容过渡（跟手拖动 → 滑出旧内容 → 换筛选 → 从另一侧滑入）
+    // 切换筛选时的内容过渡（跟手拖动 → 滑出旧内容 → 换筛选 → 从另一侧滑入并渐显）。
+    // 动画由过渡自己管，屏幕侧不再持 Job：手指接管或下一次切换会把它取消
     val filterTransition = rememberFilterTransition()
-    var switchJob by remember { mutableStateOf<Job?>(null) }
     // 每个筛选的第一页缓存 + 相邻筛选预取：滑动切换不再重新请求
     val filterCache = remember {
         FilterPageCache<Pair<Int, String>, SubjectSmall>(scope) { key, offset ->
@@ -230,24 +227,25 @@ fun ExploreScreen(
         val typeIndex = subjectTypes.indexOfFirst { it.first == type }
         return (if (typeIndex >= 0) typeIndex else 0) * swipeSorts.size
     }
-    fun selectBrowsePosition(type: Int, sort: String) {
+    /**
+     * @param velocity 松手速度（横滑传来）：决定滑出快慢，点 tab/chip 时为 0
+     */
+    fun selectBrowsePosition(type: Int, sort: String, velocity: Float = 0f) {
         val from = currentPosition()
         if (type == from.first && sort == from.second) return
         // 方向按序列位次算：目标位次在更后面 = 向左切换（与左滑同一个方向）
         val forward = browsePositionIndex(type, sort) > browsePositionIndex(from.first, from.second)
         pendingPosition = type to sort
-        switchJob?.cancel()
-        switchJob = scope.launch {
-            filterTransition.switchTo(forward) {
-                gridState.scrollToItem(0)
-                uiState = uiState.copy(selectedType = type, selectedSort = sort)
-            }
-            // 过渡跑完且没有更新的一次切换，交回给 uiState 作为基准
+        filterTransition.switchTo(forward, velocity) {
+            gridState.scrollToItem(0)
+            uiState = uiState.copy(selectedType = type, selectedSort = sort)
+        }.invokeOnCompletion {
+            // 过渡跑完（或被手指接管/被下一次切换取消）且没有更新的一次切换，交回给 uiState 作为基准
             if (pendingPosition == (type to sort)) pendingPosition = null
         }
     }
     /** 横滑一次：按序列位次取相邻位置，首尾不越界。返回 false = 没切（边界），调用方要弹回 */
-    fun swipeStep(forward: Boolean): Boolean {
+    fun swipeStep(forward: Boolean, velocity: Float): Boolean {
         val from = currentPosition()
         val target = if (swipePositions.indexOf(from) < 0) {
             // 「日期」不在横滑序列里：只在本类型的序列内移动（向后滑 → 排名，向前滑 → 收藏），
@@ -258,7 +256,7 @@ fun ExploreScreen(
             swipePositions[(index + if (forward) 1 else -1).coerceIn(0, swipePositions.lastIndex)]
         }
         if (target == from) return false
-        selectBrowsePosition(target.first, target.second)
+        selectBrowsePosition(target.first, target.second, velocity)
         return true
     }
     /** 左右相邻筛选（预取用） */
@@ -289,6 +287,8 @@ fun ExploreScreen(
                 loadMoreError = false
             )
             prefetchNeighbours()
+            // 预取命中：新内容就在这一帧，放行过渡的渐显
+            filterTransition.contentReady()
             return@LaunchedEffect
         }
         // hasMore 必须一并清掉：列表被换成加载屏时 layoutInfo 为空，
@@ -306,44 +306,21 @@ fun ExploreScreen(
                 total = entry.page.total
             )
             prefetchNeighbours()
+            // 现拉的首拉回来了：放行渐显
+            filterTransition.contentReady()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             uiState = uiState.copy(loading = false, error = e.message)
+            // 失败同样要放行：错误页也得看得清，不能一直停在半透明
+            filterTransition.contentReady()
         }
     }
 
     // 阈值按 dp 换算：裸像素在不同密度屏上手感差一倍
     val swipeThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
-    val browseSwipeModifier = Modifier.pointerInput(uiState.selectedType, uiState.selectedSort, swipeThresholdPx) {
-        var dragDistance = 0f
-        var dragging = false
-        detectHorizontalDragGestures(
-            // 跟手：手势期间内容就按手指位移走，松手才决定切页还是弹回
-            onHorizontalDrag = { _, amount ->
-                if (!dragging) {
-                    // 上一次切换可能还在跑动画：手指按下就接管，否则两边一起写位移会互相打架
-                    dragging = true
-                    switchJob?.cancel()
-                }
-                dragDistance += amount
-                filterTransition.drag(dragDistance)
-            },
-            onDragEnd = {
-                val distance = dragDistance
-                dragDistance = 0f
-                dragging = false
-                // 没切页（未达阈值或已在序列首尾）就把跟手的位移弹回去
-                if (kotlin.math.abs(distance) < swipeThresholdPx || !swipeStep(forward = distance < 0f)) {
-                    filterTransition.settleBack()
-                }
-            },
-            onDragCancel = {
-                dragDistance = 0f
-                dragging = false
-                filterTransition.settleBack()
-            }
-        )
+    val browseSwipeModifier = Modifier.filterSwipe(filterTransition, swipeThresholdPx) { forward, velocity ->
+        swipeStep(forward, velocity)
     }
 
     Scaffold(

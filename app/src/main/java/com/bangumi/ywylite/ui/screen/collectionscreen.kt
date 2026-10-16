@@ -3,8 +3,6 @@ package com.bangumi.ywylite.ui.screen
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.*
@@ -37,7 +35,6 @@ import com.bangumi.ywylite.data.model.PagedUserCollection
 import com.bangumi.ywylite.data.model.UserCollection
 import com.bangumi.ywylite.ui.component.*
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /** 加载更多 footer：列表与瀑布流两种容器共用 */
@@ -124,9 +121,9 @@ fun CollectionScreen(
     val waterfall by app.settings.collectionWaterfall.collectAsState(initial = false)
     val listState = rememberLazyListState()
     val gridState = rememberLazyStaggeredGridState()
-    // 切换筛选时的内容过渡（跟手拖动 → 滑出旧内容 → 换筛选 → 从另一侧滑入）
+    // 切换筛选时的内容过渡（跟手拖动 → 滑出旧内容 → 换筛选 → 从另一侧滑入并渐显）。
+    // 动画由过渡自己管，屏幕侧不再持 Job：手指接管或下一次切换会把它取消
     val filterTransition = rememberFilterTransition()
-    var switchJob by remember { mutableStateOf<Job?>(null) }
     // 每个筛选的第一页缓存 + 相邻筛选预取：滑动切换不再重新请求
     val filterCache = remember {
         FilterPageCache<Pair<Int?, Int?>, UserCollection>(scope) { key, offset ->
@@ -145,46 +142,46 @@ fun CollectionScreen(
     var pendingFilter by remember { mutableStateOf<Pair<Int?, Int?>?>(null) }
     fun currentFilter(): Pair<Int?, Int?> =
         pendingFilter ?: (uiState.selectedType to uiState.selectedSubjectType)
-    fun selectCollectionType(type: Int?) {
+    /**
+     * @param velocity 松手速度（横滑传来）：决定滑出快慢，点 tab/chip 时为 0
+     */
+    fun selectCollectionType(type: Int?, velocity: Float = 0f) {
         val from = currentFilter()
         if (type == from.first) return
         // 方向按 tab 顺序算：目标位次在更后面 = 向左切换（与左滑同一个方向）
         val forward = collectionTypes.indexOfFirst { it.first == type } >
             collectionTypes.indexOfFirst { it.first == from.first }
         pendingFilter = type to from.second
-        switchJob?.cancel()
-        switchJob = scope.launch {
-            filterTransition.switchTo(forward) {
-                if (waterfall) gridState.scrollToItem(0) else listState.scrollToItem(0)
-                uiState = uiState.copy(selectedType = type)
-            }
+        filterTransition.switchTo(forward, velocity) {
+            if (waterfall) gridState.scrollToItem(0) else listState.scrollToItem(0)
+            uiState = uiState.copy(selectedType = type)
+        }.invokeOnCompletion {
+            // 过渡跑完（或被手指接管/被下一次切换取消）且没有更新的一次切换，交回给 uiState 作为基准
             if (pendingFilter == (type to from.second)) pendingFilter = null
         }
     }
-    fun selectSubjectType(type: Int?) {
+    fun selectSubjectType(type: Int?, velocity: Float = 0f) {
         val from = currentFilter()
         if (type == from.second) return
         val forward = subjectTypeFilters.indexOfFirst { it.first == type } >
             subjectTypeFilters.indexOfFirst { it.first == from.second }
         pendingFilter = from.first to type
-        switchJob?.cancel()
-        switchJob = scope.launch {
-            filterTransition.switchTo(forward) {
-                if (waterfall) gridState.scrollToItem(0) else listState.scrollToItem(0)
-                uiState = uiState.copy(selectedSubjectType = type)
-            }
+        filterTransition.switchTo(forward, velocity) {
+            if (waterfall) gridState.scrollToItem(0) else listState.scrollToItem(0)
+            uiState = uiState.copy(selectedSubjectType = type)
+        }.invokeOnCompletion {
             if (pendingFilter == (from.first to type)) pendingFilter = null
         }
     }
     /** 横滑一次：序列就是 tab 顺序（全部 → 在看 → 看过 → 想看 → 搁置 → 抛弃），首尾不越界。
      *  返回 false = 没切（已在首尾），调用方要把跟手的位移弹回去 */
-    fun swipeStep(forward: Boolean): Boolean {
+    fun swipeStep(forward: Boolean, velocity: Float): Boolean {
         val from = currentFilter()
         val index = collectionTypes.indexOfFirst { it.first == from.first }
         if (index < 0) return false
         val target = collectionTypes[(index + if (forward) 1 else -1).coerceIn(0, collectionTypes.lastIndex)]
         if (target.first == from.first) return false
-        selectCollectionType(target.first)
+        selectCollectionType(target.first, velocity)
         return true
     }
     /** 左右相邻筛选（预取用） */
@@ -196,35 +193,8 @@ fun CollectionScreen(
     }
     // 阈值按 dp 换算：裸像素在不同密度屏上手感差一倍
     val swipeThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
-    val collectionSwipeModifier = Modifier.pointerInput(uiState.selectedType, waterfall, swipeThresholdPx) {
-        var dragDistance = 0f
-        var dragging = false
-        detectHorizontalDragGestures(
-            // 跟手：手势期间内容就按手指位移走，松手才决定切页还是弹回
-            onHorizontalDrag = { _, amount ->
-                if (!dragging) {
-                    // 上一次切换可能还在跑动画：手指按下就接管，否则两边一起写位移会互相打架
-                    dragging = true
-                    switchJob?.cancel()
-                }
-                dragDistance += amount
-                filterTransition.drag(dragDistance)
-            },
-            onDragEnd = {
-                val distance = dragDistance
-                dragDistance = 0f
-                dragging = false
-                // 没切页（未达阈值或已在首尾）就把跟手的位移弹回去
-                if (kotlin.math.abs(distance) < swipeThresholdPx || !swipeStep(forward = distance < 0f)) {
-                    filterTransition.settleBack()
-                }
-            },
-            onDragCancel = {
-                dragDistance = 0f
-                dragging = false
-                filterTransition.settleBack()
-            }
-        )
+    val collectionSwipeModifier = Modifier.filterSwipe(filterTransition, swipeThresholdPx) { forward, velocity ->
+        swipeStep(forward, velocity)
     }
 
     // 状态落定即写入进程缓存；加载/刷新中的瞬态不入缓存，切页回来不会停在中间态
@@ -315,6 +285,8 @@ fun CollectionScreen(
                 loadMoreError = false
             )
             prefetchNeighbours()
+            // 预取命中：新内容就在这一帧，放行过渡的渐显
+            filterTransition.contentReady()
             return@LaunchedEffect
         }
         // hasMore 必须一并清掉：否则列表被换成加载屏时 layoutInfo 为空，
@@ -332,10 +304,14 @@ fun CollectionScreen(
                 hasMore = entry.hasMore
             )
             prefetchNeighbours()
+            // 现拉的首拉回来了：放行渐显
+            filterTransition.contentReady()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             uiState = uiState.copy(loading = false, error = e.message)
+            // 失败同样要放行：错误页也得看得清，不能一直停在半透明
+            filterTransition.contentReady()
         }
     }
 

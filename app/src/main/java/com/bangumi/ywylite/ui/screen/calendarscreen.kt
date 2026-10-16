@@ -1,7 +1,6 @@
 package com.bangumi.ywylite.ui.screen
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,7 +16,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -26,8 +24,6 @@ import com.bangumi.ywylite.data.model.CalendarDay
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
 
 data class CalendarUiState(
     val loading: Boolean = true,
@@ -45,72 +41,47 @@ fun CalendarScreen(
     onSearchClick: () -> Unit = {}
 ) {
     val app = App.INSTANCE
-    val scope = rememberCoroutineScope()
     var uiState by remember { mutableStateOf(CalendarUiState()) }
-    // 左右滑动切星期，与浏览页/收藏页共用同一套过渡（滑出旧的一屏 → 换星期 → 从另一侧滑入）
+    // 左右滑动切星期，与浏览页/收藏页共用同一套过渡（滑出旧的一屏 → 换星期 → 从另一侧滑入并渐显）。
+    // 动画由过渡自己管，屏幕侧不再持 Job：手指接管或下一次切换会把它取消
     val filterTransition = rememberFilterTransition()
     val listState = rememberLazyListState()
-    var switchJob by remember { mutableStateOf<Job?>(null) }
     // 切换中的目标：过渡没走完时 uiState 还是旧的一天，下一次滑动要相对它算方向
     var pendingDay by remember { mutableStateOf<Int?>(null) }
     val swipeThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
 
-    fun selectDay(index: Int) {
+    /**
+     * @param velocity 松手速度（横滑传来）：决定滑出快慢，点星期 tab 时为 0
+     */
+    fun selectDay(index: Int, velocity: Float = 0f) {
         // 首尾边界不越界（向后滑过星期日、向前滑过星期一都不动）
         if (index !in uiState.data.indices) return
         val from = pendingDay ?: uiState.selectedDay
         if (index == from) return
         val forward = index > from
         pendingDay = index
-        switchJob?.cancel()
-        switchJob = scope.launch {
-            filterTransition.switchTo(forward) {
-                // 每天的列表都在同一个 LazyColumn 里，换天要显式回到顶部
-                listState.scrollToItem(0)
-                uiState = uiState.copy(selectedDay = index)
-            }
+        filterTransition.switchTo(forward, velocity) {
+            // 每天的列表都在同一个 LazyColumn 里，换天要显式回到顶部
+            listState.scrollToItem(0)
+            uiState = uiState.copy(selectedDay = index)
+            // 整周数据都在内存里，换天不需要等加载：这一帧就放行渐显
+            filterTransition.contentReady()
+        }.invokeOnCompletion {
             if (pendingDay == index) pendingDay = null
         }
     }
 
     /** 横滑一次：下一天 / 上一天。返回 false = 已在首尾没切，调用方要把跟手的位移弹回去 */
-    fun swipeStep(forward: Boolean): Boolean {
+    fun swipeStep(forward: Boolean, velocity: Float): Boolean {
         val from = pendingDay ?: uiState.selectedDay
         val target = from + if (forward) 1 else -1
         if (target !in uiState.data.indices) return false
-        selectDay(target)
+        selectDay(target, velocity)
         return true
     }
 
-    val daySwipeModifier = Modifier.pointerInput(uiState.selectedDay, uiState.data.size, swipeThresholdPx) {
-        var dragDistance = 0f
-        var dragging = false
-        detectHorizontalDragGestures(
-            // 跟手：手势期间内容就按手指位移走，松手才决定切天还是弹回
-            onHorizontalDrag = { _, amount ->
-                if (!dragging) {
-                    // 上一次切换可能还在跑动画：手指按下就接管，否则两边一起写位移会互相打架
-                    dragging = true
-                    switchJob?.cancel()
-                }
-                dragDistance += amount
-                filterTransition.drag(dragDistance)
-            },
-            onDragEnd = {
-                val distance = dragDistance
-                dragDistance = 0f
-                dragging = false
-                // 没切（未达阈值或已在首尾）就把跟手的位移弹回去
-                if (kotlin.math.abs(distance) < swipeThresholdPx || !swipeStep(forward = distance < 0f)) {
-                    filterTransition.settleBack()
-                }
-            },
-            onDragCancel = {
-                dragDistance = 0f
-                dragging = false
-                filterTransition.settleBack()
-            }
-        )
+    val daySwipeModifier = Modifier.filterSwipe(filterTransition, swipeThresholdPx) { forward, velocity ->
+        swipeStep(forward, velocity)
     }
 
     LaunchedEffect(uiState.retryKey) {
