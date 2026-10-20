@@ -53,13 +53,40 @@
 
 ## 🖼️ 应用截图
 
-| 浏览 | 收藏 | 详情 |
-|:---:|:---:|:---:|
-| 浏览页 | 收藏页 | 条目详情页 |
+<table>
+  <tr>
+    <td width="33%"><img src="docs/screenshots/browse.jpg" alt="浏览页" width="260"></td>
+    <td width="33%"><img src="docs/screenshots/collection-grid.jpg" alt="收藏页 · 瀑布流" width="260"></td>
+    <td width="33%"><img src="docs/screenshots/collection-list.jpg" alt="收藏页 · 列表" width="260"></td>
+  </tr>
+  <tr>
+    <td align="center">浏览页 · 动画/书籍/游戏/音乐</td>
+    <td align="center">收藏页 · 瀑布流样式</td>
+    <td align="center">收藏页 · 列表样式</td>
+  </tr>
+</table>
 
-| 时间线 | 标签 | 设置 |
-|:---:|:---:|:---:|
-| 个人时间线 | 标签云 | 设置页 |
+<table>
+  <tr>
+    <td width="33%"><img src="docs/screenshots/detail.jpg" alt="条目详情页" width="260"></td>
+    <td width="33%"><img src="docs/screenshots/detail-comments.jpg" alt="条目详情页 · 评论" width="260"></td>
+    <td width="33%"><img src="docs/screenshots/timeline.jpg" alt="个人时间线" width="260"></td>
+  </tr>
+  <tr>
+    <td align="center">条目详情页 · 章节/标签/角色/关联条目</td>
+    <td align="center">条目详情页 · 用户评论</td>
+    <td align="center">个人中心 · 时间线</td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/settings.jpg" alt="设置页" width="260"></td>
+  </tr>
+  <tr>
+    <td align="center">设置页 · 主题/背景/默认打开页</td>
+  </tr>
+</table>
 
 ---
 
