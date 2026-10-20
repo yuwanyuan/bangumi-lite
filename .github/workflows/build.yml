@@ -129,9 +129,7 @@ jobs:
             所以这里的构建可能比 master 最新提交晚几分钟，正常现象。
 
             stable 版请下载正式 Release（v* 标签）。
-          files: |
-            app/build/outputs/apk/release/app-release.apk
-            version.json
+          files: app/build/outputs/apk/release/app-release.apk
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')

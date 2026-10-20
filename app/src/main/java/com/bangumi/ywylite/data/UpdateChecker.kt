@@ -27,13 +27,12 @@ data class UpdateInfo(
 }
 
 /**
- * 检查更新。版本源是 GitHub Releases：
- * - 正式版（versionName 不带 -dev.）→ latest 正式 Release
- * - 开发版（versionName 带 -dev.N）→ tag 为 `latest` 的滚动预发布
+ * 检查更新。版本源是 GitHub 的**正式 Release**（latest，不含预发布/开发版）：
+ * 装了开发版（versionName 带 -dev.N）也只报 base 更高的正式版，
+ * 同 base 的开发版不会被「降级」提示到对应正式版。
  *
- * 两条通道各自比较，避免「1.2.5 正式版 > 1.2.5-dev.N」的语义倒挂把开发版用户
- * 反向「升级」到同 base 的正式版。新版的 presence 由 version.json 里的 versionCode
- * 判定（跨通道单调），老 release 没有清单时退回语义版本比较。
+ * 新版的 versionCode 来自 version.json（跨通道单调），老 release 没有该文件时
+ * 退回语义版本比较。
  */
 class UpdateChecker(
     private val settings: Settings,
@@ -46,21 +45,14 @@ class UpdateChecker(
         coerceInputValues = true
     }
 
-    private val devChannel: Boolean get() = BuildConfig.VERSION_NAME.contains("-dev.")
-
     /**
-     * 查询最新版本。
+     * 查询最新正式版。
      *
      * @return 有新版时返回 [UpdateInfo]；已是最新返回 null；网络/解析失败抛异常。
      *         自动检查的调用方应静默吞掉异常，手动检查才提示「暂时没查到新版本」。
      */
     suspend fun checkLatest(): UpdateInfo? = withContext(Dispatchers.IO) {
-        val url = if (devChannel) {
-            "https://api.github.com/repos/$REPO/releases/tags/latest"
-        } else {
-            "https://api.github.com/repos/$REPO/releases/latest"
-        }
-        val release = fetchRelease(url)
+        val release = fetchRelease("https://api.github.com/repos/$REPO/releases/latest")
         val remote = release.toUpdateInfo()
         if (isNewer(remote)) remote else null
     }
@@ -96,8 +88,7 @@ class UpdateChecker(
     // ---------- 网络 ----------
 
     private fun fetchRelease(url: String): GithubRelease {
-        // no-cache：Release 元数据（尤其 latest 预发布的资产）会随每次构建变化，
-        // 共享 OkHttp 缓存里可能还是旧响应
+        // no-cache：Release 元数据会随发版变化，共享 OkHttp 缓存里可能还是旧响应
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/vnd.github+json")
@@ -111,7 +102,7 @@ class UpdateChecker(
     }
 
     private fun fetchVersionManifest(url: String): VersionManifest {
-        // 预发布资产同名覆盖，CDN 可能缓存旧文件：加时间戳参数绕开
+        // 资产若被覆盖发布，CDN 可能缓存旧文件：加时间戳参数绕开
         val busted = url + (if (url.contains('?')) "&" else "?") + "t=" + (System.currentTimeMillis() / 60_000)
         val request = Request.Builder()
             .url(busted)
@@ -129,10 +120,9 @@ class UpdateChecker(
             .firstOrNull { it.name == VERSION_MANIFEST_NAME }
             ?.let { runCatching { fetchVersionManifest(it.downloadUrl) }.getOrNull() }
 
-        // 开发版没有清单就无法知道滚动预发布对应哪个 dev 序号，按「查不到」处理；
-        // 正式版可以退回 tag（v1.2.6 → 1.2.6）
+        // 老 release（v1.2.5 及之前）没有清单：退回 tag（v1.2.6 → 1.2.6）
         val versionName = manifest?.versionName?.takeIf { it.isNotBlank() }
-            ?: tagName.removePrefix("v").takeIf { it.isNotBlank() && !devChannel }
+            ?: tagName.removePrefix("v").takeIf { it.isNotBlank() }
             ?: throw IOException("release 缺少 version.json")
 
         return UpdateInfo(
@@ -145,10 +135,11 @@ class UpdateChecker(
     // ---------- 版本比较 ----------
 
     private fun isNewer(remote: UpdateInfo): Boolean {
-        val currentCode = BuildConfig.VERSION_CODE
-        // versionCode 跨通道单调（CI run 号），两边都有时以它为准
-        if (remote.versionCode > 0 && currentCode > 0) return remote.versionCode > currentCode
-        return compareVersionNames(remote.versionName, BuildConfig.VERSION_NAME) > 0
+        // 只比 base：开发版 1.2.5-dev.4 已包含 1.2.5 的内容，不该被提示「升级」到同 base 的正式版；
+        // 正式版 1.2.6 出来时 base 更高，照常提示。
+        // 不用 versionCode 比较：tag 构建与 master 构建共用 CI 计数器，正式版的号可能反而更小。
+        val currentBase = BuildConfig.VERSION_NAME.substringBefore("-dev.").removePrefix("v")
+        return compareVersionNames(remote.versionName.substringBefore("-dev."), currentBase) > 0
     }
 
     private fun compareVersionNames(a: String, b: String): Int {
