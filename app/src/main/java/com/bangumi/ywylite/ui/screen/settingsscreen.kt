@@ -36,6 +36,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** 字体大小档位：系统字号基础上的乘率 */
 private val fontScaleOptions = listOf(
@@ -587,7 +588,12 @@ fun SettingsScreen(
                         scope.launch {
                             checkingUpdate = true
                             val outcome = try {
-                                Result.success(app.updateChecker.checkLatest())
+                                // 与自动检查同一个整体限时，避免三条通道串行把人晾在「正在检查…」
+                                Result.success(
+                                    withTimeoutOrNull(com.bangumi.ywylite.data.UpdateChecker.CHECK_TIMEOUT_MILLIS) {
+                                        app.updateChecker.checkLatest()
+                                    }
+                                )
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {

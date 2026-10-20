@@ -34,6 +34,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.BuildConfig
+import com.bangumi.ywylite.data.UpdateChecker
 import com.bangumi.ywylite.data.UpdateInfo
 import com.bangumi.ywylite.ui.component.AppBackground
 import com.bangumi.ywylite.ui.component.LocalWallpaperBlur
@@ -47,6 +48,7 @@ import com.bangumi.ywylite.ui.screen.*
 import com.bangumi.ywylite.ui.theme.LocalDarkTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class BottomNavItem(
     val route: String,
@@ -93,7 +95,8 @@ private fun BangumiAppContent(baseDensity: Density) {
         // 让首页请求先走，避免启动瞬间和壁纸/列表抢网络
         delay(3_000)
         val update = try {
-            app.updateChecker.checkLatest()
+            // 整体限时：检查会在 API/镜像/网页兜底之间串行尝试，不能无限占着
+            withTimeoutOrNull(UpdateChecker.CHECK_TIMEOUT_MILLIS) { app.updateChecker.checkLatest() }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
