@@ -22,7 +22,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -38,9 +37,8 @@ import com.bangumi.ywylite.BuildConfig
 import com.bangumi.ywylite.data.UpdateInfo
 import com.bangumi.ywylite.ui.component.AppBackground
 import com.bangumi.ywylite.ui.component.LocalWallpaperBlur
-import com.bangumi.ywylite.ui.component.UpdateAvailableDialog
+import com.bangumi.ywylite.ui.component.UpdateFlowHost
 import com.bangumi.ywylite.ui.component.WallpaperBlurScope
-import com.bangumi.ywylite.ui.component.openInBrowser
 import com.bangumi.ywylite.ui.component.wallpaperGlass
 import com.bangumi.ywylite.ui.component.hazeWallpaperSource
 import com.bangumi.ywylite.ui.component.rememberWallpaperHazeState
@@ -49,7 +47,6 @@ import com.bangumi.ywylite.ui.screen.*
 import com.bangumi.ywylite.ui.theme.LocalDarkTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 data class BottomNavItem(
     val route: String,
@@ -90,8 +87,6 @@ private fun BangumiAppContent(baseDensity: Density) {
 
     // 自动检查更新：配置就绪后查一次 GitHub。失败静默（只有手动检查才提示），
     // 命中的版本还要过「自动开关 / 跳过 / 24 小时静默期」三道门槛
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var pendingUpdate by remember { mutableStateOf<UpdateInfo?>(null) }
     LaunchedEffect(ready) {
         if (!ready) return@LaunchedEffect
@@ -345,28 +340,11 @@ private fun BangumiAppContent(baseDensity: Density) {
     }
     }
 
-    // 自动检查发现新版本：四选项弹窗（立即更新 / 稍后提醒 / 跳过本次 / 永不检查）
-    pendingUpdate?.let { update ->
-        UpdateAvailableDialog(
-            currentVersion = BuildConfig.VERSION_NAME,
-            update = update,
-            onUpdateNow = {
-                openInBrowser(context, update.releaseUrl)
-                pendingUpdate = null
-            },
-            onRemindLater = {
-                scope.launch { app.updateChecker.snooze(update) }
-                pendingUpdate = null
-            },
-            onSkipVersion = {
-                scope.launch { app.updateChecker.skip(update) }
-                pendingUpdate = null
-            },
-            onNeverCheck = {
-                scope.launch { app.updateChecker.setAutoCheckEnabled(false) }
-                pendingUpdate = null
-            }
-        )
-    }
+    // 自动检查发现新版本：点击即下载安装（直链失败自动换镜像）
+    UpdateFlowHost(
+        currentVersion = BuildConfig.VERSION_NAME,
+        update = pendingUpdate,
+        onDismiss = { pendingUpdate = null }
+    )
     }
 }

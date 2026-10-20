@@ -394,29 +394,12 @@ fun SettingsScreen(
         )
     }
 
-    // 手动检查发现新版本：与自动检查共用同一个四选项弹窗
-    manualUpdate?.let { update ->
-        com.bangumi.ywylite.ui.component.UpdateAvailableDialog(
-            currentVersion = currentVersion,
-            update = update,
-            onUpdateNow = {
-                openInBrowser(context, update.releaseUrl)
-                manualUpdate = null
-            },
-            onRemindLater = {
-                scope.launch { app.updateChecker.snooze(update) }
-                manualUpdate = null
-            },
-            onSkipVersion = {
-                scope.launch { app.updateChecker.skip(update) }
-                manualUpdate = null
-            },
-            onNeverCheck = {
-                scope.launch { app.updateChecker.setAutoCheckEnabled(false) }
-                manualUpdate = null
-            }
-        )
-    }
+    // 手动检查发现新版本：与自动检查共用同一套弹窗 + 下载流程
+    com.bangumi.ywylite.ui.component.UpdateFlowHost(
+        currentVersion = currentVersion,
+        update = manualUpdate,
+        onDismiss = { manualUpdate = null }
+    )
 
     Scaffold(
         containerColor = Color.Transparent,

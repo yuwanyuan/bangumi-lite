@@ -87,19 +87,6 @@ jobs:
           APP_DEV_BUILD: ${{ steps.devbuild.outputs.build }}
         run: ./gradlew assembleRelease
 
-      - name: Write version manifest
-        shell: bash
-        run: |
-          # 随 Release 一起发布 version.json，应用检查更新时据此拿到 versionCode
-          #（跨通道单调，用于判断新旧与「跳过本次更新」）与 versionName，无需下载整包
-          sdk="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
-          aapt2="$(find "$sdk/build-tools" -name aapt2 -type f | sort -V | tail -1)"
-          line="$("$aapt2" dump badging app/build/outputs/apk/release/app-release.apk | head -1)"
-          code="$(printf '%s' "$line" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")"
-          name="$(printf '%s' "$line" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
-          printf '{"versionCode":%s,"versionName":"%s"}\n' "$code" "$name" > version.json
-          cat version.json
-
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
@@ -138,5 +125,4 @@ jobs:
           files: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/release/app-release.apk
-            version.json
           generate_release_notes: true

@@ -7,6 +7,7 @@ import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.bangumi.ywylite.data.Settings
 import com.bangumi.ywylite.data.UpdateChecker
+import com.bangumi.ywylite.data.UpdateInstaller
 import com.bangumi.ywylite.data.api.BangumiApi
 import com.bangumi.ywylite.data.api.ImageNetworkProxy
 import com.bangumi.ywylite.data.api.OAuthTokenRejectedException
@@ -31,6 +32,7 @@ class App : Application(), ImageLoaderFactory {
     val api: BangumiApi by lazy { BangumiApi(this) }
     val settings: Settings by lazy { Settings(this) }
     val updateChecker by lazy { UpdateChecker(settings, api) }
+    val updateInstaller by lazy { UpdateInstaller(this) }
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
@@ -51,6 +53,9 @@ class App : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         INSTANCE = this
+        // 上次更新下载被中断（进程被杀/闪退/用户取消）会留下 .part 残包，这里统一清掉。
+        // 放 IO 线程做，文件很少，不影响启动
+        appScope.launch { updateInstaller.cleanupStale() }
         // access_token 失效（401）时先尝试用 refresh_token 续期，失败才清登录态
         api.onTokenInvalid = { failedToken ->
             appScope.launch { refreshTokenIfNeeded(failedToken) }

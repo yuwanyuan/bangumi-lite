@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 应用内更新：把下载到 cacheDir/updates 的 APK 以 content:// 交给系统安装器。
+     安装器是另一个应用，没有 FileProvider 就没法读我们的私有缓存目录。 -->
+<paths>
+    <cache-path
+        name="updates"
+        path="updates/" />
+</paths>

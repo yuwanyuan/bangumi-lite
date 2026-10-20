@@ -14,25 +14,23 @@ import java.io.IOException
 /**
  * 一次「发现新版本」的信息。
  *
- * [versionCode] 来自 CI 随包发布的 version.json（见 .github/workflows/build.yml）。
- * 早期 release 没有该文件时退回 versionName 比较，versionCode 记为 0。
+ * 标识与比较一律用 [versionName]（正式版版本号，如 `1.2.6`）：
+ * versionCode 是 CI run 号，同一版本重构建会变，不能当「这个版本」的身份。
  */
 data class UpdateInfo(
     val versionName: String,
-    val versionCode: Int,
-    val releaseUrl: String
+    val releaseUrl: String,
+    /** 安装包直链（GitHub 资产），下载失败才走镜像 */
+    val downloadUrl: String
 ) {
-    /** 跳过/稍后提醒用的版本标识：优先 versionCode，老 release 退回 versionName */
-    val key: String get() = if (versionCode > 0) versionCode.toString() else versionName
+    /** 跳过/稍后提醒用的版本标识：就是版本号 */
+    val key: String get() = versionName
 }
 
 /**
  * 检查更新。版本源是 GitHub 的**正式 Release**（latest，不含预发布/开发版）：
  * 装了开发版（versionName 带 -dev.N）也只报 base 更高的正式版，
  * 同 base 的开发版不会被「降级」提示到对应正式版。
- *
- * 新版的 versionCode 来自 version.json（跨通道单调），老 release 没有该文件时
- * 退回语义版本比较。
  */
 class UpdateChecker(
     private val settings: Settings,
@@ -63,20 +61,28 @@ class UpdateChecker(
      */
     suspend fun shouldAutoPrompt(update: UpdateInfo): Boolean {
         if (!settings.autoCheckUpdate.first()) return false
-        if (settings.skippedUpdateKey.first() == update.key) return false
-        val snoozeKey = settings.updateSnoozeKey.first()
+        if (normalizeLegacyKey(settings.skippedUpdateKey.first()) == update.key) return false
+        val snoozeKey = normalizeLegacyKey(settings.updateSnoozeKey.first())
         if (snoozeKey == update.key && System.currentTimeMillis() < settings.updateSnoozeUntil.first()) {
             return false
         }
         return true
     }
 
+    /**
+     * 早期版本按 versionCode 记「跳过/稍后提醒」，存的是纯数字。
+     * 现在按版本号记，旧值无法对应任何版本号——当作没有记录，让它再提醒一次，
+     * 而不是让一条永远匹配不上的记录留在本地。
+     */
+    private fun normalizeLegacyKey(key: String?): String? =
+        key?.takeIf { !it.all { ch -> ch.isDigit() } }
+
     /** 稍后提醒：同一版本 24 小时内不再弹（换新版本时照常提示） */
     suspend fun snooze(update: UpdateInfo) {
         settings.saveUpdateSnooze(update.key, System.currentTimeMillis() + SNOOZE_MILLIS)
     }
 
-    /** 跳过本次更新：记住该版本的 versionCode，自动检查永不再提 */
+    /** 跳过本次更新：记住该版本号，自动检查永不再提 */
     suspend fun skip(update: UpdateInfo) {
         settings.saveSkippedUpdateKey(update.key)
     }
@@ -101,34 +107,21 @@ class UpdateChecker(
         }
     }
 
-    private fun fetchVersionManifest(url: String): VersionManifest {
-        // 资产若被覆盖发布，CDN 可能缓存旧文件：加时间戳参数绕开
-        val busted = url + (if (url.contains('?')) "&" else "?") + "t=" + (System.currentTimeMillis() / 60_000)
-        val request = Request.Builder()
-            .url(busted)
-            .header("Cache-Control", "no-cache")
-            .build()
-        api.appOkHttp.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("version.json HTTP ${response.code}")
-            val body = response.body?.string() ?: throw IOException("version.json 返回为空")
-            return json.decodeFromString<VersionManifest>(body)
-        }
-    }
-
     private fun GithubRelease.toUpdateInfo(): UpdateInfo {
-        val manifest = assets
-            .firstOrNull { it.name == VERSION_MANIFEST_NAME }
-            ?.let { runCatching { fetchVersionManifest(it.downloadUrl) }.getOrNull() }
-
-        // 老 release（v1.2.5 及之前）没有清单：退回 tag（v1.2.6 → 1.2.6）
-        val versionName = manifest?.versionName?.takeIf { it.isNotBlank() }
-            ?: tagName.removePrefix("v").takeIf { it.isNotBlank() }
-            ?: throw IOException("release 缺少 version.json")
+        // 已标记为预发布的一律不当正式版（latest 端点本不该返回它，这里只作兜底）
+        if (prerelease) throw IOException("release 是预发布")
+        // 版本号取 tag（v1.2.6 → 1.2.6）：GitHub Release 里只有它代表「这个正式版」
+        val versionName = tagName.removePrefix("v").takeIf { it.isNotBlank() }
+            ?: throw IOException("release 没有版本号")
+        // 只认 CI 发布的正式安装包；没有它就没法「点击即下载」
+        val apkUrl = assets.firstOrNull { it.name == RELEASE_APK_NAME }?.downloadUrl
+            ?.takeIf { it.isNotBlank() }
+            ?: throw IOException("release 没有安装包")
 
         return UpdateInfo(
             versionName = versionName,
-            versionCode = manifest?.versionCode ?: 0,
-            releaseUrl = htmlUrl
+            releaseUrl = htmlUrl,
+            downloadUrl = apkUrl
         )
     }
 
@@ -137,7 +130,6 @@ class UpdateChecker(
     private fun isNewer(remote: UpdateInfo): Boolean {
         // 只比 base：开发版 1.2.5-dev.4 已包含 1.2.5 的内容，不该被提示「升级」到同 base 的正式版；
         // 正式版 1.2.6 出来时 base 更高，照常提示。
-        // 不用 versionCode 比较：tag 构建与 master 构建共用 CI 计数器，正式版的号可能反而更小。
         val currentBase = BuildConfig.VERSION_NAME.substringBefore("-dev.").removePrefix("v")
         return compareVersionNames(remote.versionName.substringBefore("-dev."), currentBase) > 0
     }
@@ -185,15 +177,9 @@ class UpdateChecker(
         @SerialName("browser_download_url") val downloadUrl: String = ""
     )
 
-    @Serializable
-    private data class VersionManifest(
-        val versionCode: Int = 0,
-        val versionName: String = ""
-    )
-
     companion object {
         private const val REPO = "yuwanyuan/bangumi-lite"
-        private const val VERSION_MANIFEST_NAME = "version.json"
+        private const val RELEASE_APK_NAME = "app-release.apk"
         private const val SNOOZE_MILLIS = 24L * 60 * 60 * 1000
     }
 }
