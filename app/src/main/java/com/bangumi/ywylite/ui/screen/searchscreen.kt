@@ -2,7 +2,6 @@ package com.bangumi.ywylite.ui.screen
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,6 +20,7 @@ import com.bangumi.ywylite.App
 import com.bangumi.ywylite.data.model.PagedSubject
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.ui.component.*
+import com.bangumi.ywylite.ui.theme.LocalDarkTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -294,7 +294,7 @@ private fun SearchResultItem(
     onClick: () -> Unit,
     typeLabel: String? = null
 ) {
-    val darkTheme = isSystemInDarkTheme()
+    val darkTheme = LocalDarkTheme.current
     val shape = RoundedCornerShape(18.dp)
     val background = if (darkTheme) {
         MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)

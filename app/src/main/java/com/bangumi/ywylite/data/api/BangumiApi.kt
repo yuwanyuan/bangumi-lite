@@ -337,15 +337,23 @@ class BangumiApi(private val context: Context) {
     }
 
     fun updateToken(token: String?) {
+        if (accessToken != token) {
+            // 时间线条目摘要包含按当前鉴权结果取得的中文名/封面；切换账号或登录态时不能沿用旧结果
+            subjectBriefCache.clear()
+        }
         accessToken = token
     }
 
     /**
-     * 清空 OkHttp 磁盘缓存。缓存设置页必须走这里而不是删目录：
-     * 运行中的 Cache 实例持有同一个目录，从文件系统底下抽走会让它写坏日志。
+     * 清空网络缓存：同时清 OkHttp 磁盘缓存和时间线摘要的进程内缓存。
+     * 后者不清会导致“清除缓存”后时间线仍复用旧的原名/缺失条目 ID，
+     * 只有彻底杀掉 App 或清除应用数据才恢复正常。
+     * 缓存设置页必须走这里而不是直接删目录：运行中的 Cache 实例持有同一目录，
+     * 从文件系统底下抽走会让它写坏日志。
      */
     fun clearNetworkCache() {
         baseOkHttp.cache?.evictAll()
+        subjectBriefCache.clear()
     }
 
     /**
@@ -1046,7 +1054,12 @@ class BangumiApi(private val context: Context) {
             if (cached.nameFetched && cached.coverFetched && (!needCn || cached.nameCnFetched)) return cached
         }
         return runCatching {
-            val subject: Subject = client.get("/v0/subjects/${id}") { withAuth() }.body()
+            // 必须强制回源：api.bgm.tv 响应带 max-age=3600，端点故障期取到的空结果会被缓存住，
+            // 之后一小时内即使恢复也一直复用旧值（表现为中文名/封面迟迟不回来）
+            val subject: Subject = client.get("/v0/subjects/${id}") {
+                withAuth()
+                headers { append(FORCE_NETWORK_HEADER, "1") }
+            }.body()
             val nameCn = subject.nameCn.orEmpty()
             val cover = subject.images?.large ?: subject.images?.common
                 ?: subject.images?.medium ?: subject.image
@@ -1150,7 +1163,11 @@ class BangumiApi(private val context: Context) {
 
     /** 章节 → 所属条目 ID（时间线里「看过 ep.N」形态的动态只给了章节链接） */
     suspend fun fetchEpisodeSubjectId(episodeId: Int): Int = runCatching {
-        val body = client.get("/v0/episodes/${episodeId}") { withAuth() }.bodyAsText()
+        // 同样强制回源：章节→条目的映射在故障期被缓存住会让条目一直点不开
+        val body = client.get("/v0/episodes/${episodeId}") {
+            withAuth()
+            headers { append(FORCE_NETWORK_HEADER, "1") }
+        }.bodyAsText()
         json.parseToJsonElement(body).jsonObject["subject_id"]
             ?.jsonPrimitive?.content?.toIntOrNull() ?: 0
     }.getOrDefault(0)

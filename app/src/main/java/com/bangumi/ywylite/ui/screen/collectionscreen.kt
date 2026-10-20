@@ -3,7 +3,6 @@ package com.bangumi.ywylite.ui.screen
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
@@ -37,6 +36,7 @@ import com.bangumi.ywylite.data.model.PagedUserCollection
 import com.bangumi.ywylite.data.model.SubjectSmall
 import com.bangumi.ywylite.data.model.UserCollection
 import com.bangumi.ywylite.ui.component.*
+import com.bangumi.ywylite.ui.theme.LocalDarkTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -417,6 +417,9 @@ fun CollectionScreen(
         }
     }
 
+    // 首拉或下拉刷新超过 10 秒没有结果：连不上时收藏页会一直转圈/停在旧数据，这里明确提示
+    NetworkTimeoutDialog(loading = uiState.loading || uiState.refreshing)
+
     Scaffold(
         containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
@@ -636,7 +639,7 @@ private fun CollectionRow(
     collectionType: Int?,
     onSubjectClick: (Int) -> Unit
 ) {
-    val darkTheme = isSystemInDarkTheme()
+    val darkTheme = LocalDarkTheme.current
     val cardShape = RoundedCornerShape(18.dp)
     val cardBackground = if (darkTheme) {
         MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)

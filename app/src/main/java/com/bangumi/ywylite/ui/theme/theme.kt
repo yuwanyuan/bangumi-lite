@@ -6,6 +6,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.toArgb
@@ -56,35 +57,6 @@ private fun Color.shiftLightness(steps: Float): Color {
     return Color.hsl(hsl[0], hsl[1], (hsl[2] + steps * 0.12f).coerceIn(0f, 1f))
 }
 
-/**
- * 由壁纸种子色生成浅色配色。
- *
- * [textShift] 用于把整套前景文字明度整体推一档：壁纸偏亮时往深推（正文字更黑），
- * 壁纸偏暗时往浅推，保证文字在壁纸上始终比背景「更极端」，拉开对比。
- */
-private fun lightSchemeFromSeed(seed: Color, textShift: Float): ColorScheme {
-    val primary = seed.tone(0.42f)
-    val primaryContainer = seed.tone(0.90f, 0.5f)
-    val onPrimaryContainer = seed.tone(0.18f)
-    return lightColorScheme(
-        primary = primary,
-        onPrimary = readableOn(primary),
-        primaryContainer = primaryContainer,
-        onPrimaryContainer = onPrimaryContainer,
-        secondary = seed.tone(0.45f, 0.6f),
-        onSecondary = Color.White,
-        secondaryContainer = seed.tone(0.88f, 0.35f),
-        onSecondaryContainer = seed.tone(0.20f),
-        background = seed.tone(0.97f, 0.18f),
-        onBackground = seed.tone(0.12f, 0.20f).shiftLightness(textShift),
-        surface = seed.tone(0.96f, 0.22f),
-        onSurface = seed.tone(0.12f, 0.20f).shiftLightness(textShift),
-        surfaceVariant = seed.tone(0.90f, 0.28f),
-        onSurfaceVariant = seed.tone(0.34f, 0.22f).shiftLightness(textShift),
-        outline = seed.tone(0.52f, 0.16f)
-    )
-}
-
 /** 由壁纸种子色生成深色配色（primary 提亮、容器色压深，保证深底上的可读性） */
 private fun darkSchemeFromSeed(seed: Color, textShift: Float): ColorScheme {
     val primary = seed.tone(0.76f, 0.7f)
@@ -121,6 +93,15 @@ private fun textShiftFor(wallpaperLuminance: Float?): Float = when {
 }
 
 /**
+ * 实际生效的深浅色（已计入「有背景图即固定深色」）。
+ *
+ * 屏幕内部一律用它判断深浅，不要再调 isSystemInDarkTheme()：后者只反映系统设置，
+ * 与设置页选的浅色/深色、以及背景图强制的深色都可能不一致，
+ * 毛玻璃 tint 会按相反的一套取色（深色配色下压白色薄雾）。
+ */
+val LocalDarkTheme = staticCompositionLocalOf { false }
+
+/**
  * 给整套排版加黑色描边（阴影实现）：文字直接压在壁纸照片上时，
  * 纯色字在花纹/亮暗交界处会糊掉，加一圈黑边后任意背景都可读。
  * 只有设置了壁纸时才加；详情页与条目列表通过各自的主题覆盖掉（见 withTextOutline=false）。
@@ -139,11 +120,16 @@ private fun Typography.withTextOutline(enabled: Boolean, blurPx: Float): Typogra
 }
 
 /**
- * 配色只由应用内壁纸驱动：设了壁纸就用它提取的种子色派生整套配色，
+ * 配色只由应用内壁纸驱动：设了壁纸就用它提取的种子色派生深色配色，
  * 没设壁纸就固定走品牌粉/品牌深色主题。
  *
  * 不用系统的 dynamicLightColorScheme/dynamicDarkColorScheme：它们跟随「系统壁纸」
  * 取色，前景色可能与实际呈现的底色不同步，出现文字看不见的问题。
+ *
+ * 有壁纸即固定深色：浅色配色压在照片上要靠黑色文字描边才读得清，描边观感差，
+ * 因此调用方（MainActivity）在设了背景图时直接传 darkTheme=true——
+ * 用它判定的墙纸 URI 立即可用，比种子色提取完成早，换背景时不闪浅色。
+ * 这里再兜一层：种子色在而 darkTheme 意外为 false 时仍走深色配色。
  *
  * [wallpaperLuminance] 为壁纸平均亮度：据此把整套前景文字往深/往浅推一档，
  * 并决定是否给文字加黑色描边（有壁纸才加）。
@@ -157,10 +143,7 @@ fun BangumiTheme(
 ) {
     val textShift = textShiftFor(wallpaperLuminance)
     val colorScheme = when {
-        wallpaperSeed != null -> {
-            if (darkTheme) darkSchemeFromSeed(wallpaperSeed, textShift)
-            else lightSchemeFromSeed(wallpaperSeed, textShift)
-        }
+        wallpaperSeed != null -> darkSchemeFromSeed(wallpaperSeed, textShift)
         darkTheme -> DarkColors
         else -> LightColors
     }
@@ -185,6 +168,7 @@ fun BangumiTheme(
         content = {
             CompositionLocalProvider(
                 LocalContentColor provides colorScheme.onBackground,
+                LocalDarkTheme provides darkTheme,
                 content = content
             )
         }

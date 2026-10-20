@@ -101,7 +101,52 @@ fun ProxySettingsScreen(
                 Text("启用代理", style = MaterialTheme.typography.bodyLarge)
                 Switch(
                     checked = enabled,
-                    onCheckedChange = { enabled = it }
+                    onCheckedChange = { checked ->
+                        // 开关是独立入口：点下立即落盘并重建客户端，不必再点「保存」。
+                        // 开启前校验地址/端口，避免开关亮着却因地址为空而静默直连。
+                        if (checked) {
+                            val portNum = port.toIntOrNull()?.takeIf { it in 1..65535 }
+                            val cleanHost = host.trim()
+                            val hostError = hostErrorOf(cleanHost)
+                            when {
+                                hostError != null -> {
+                                    testResult = hostError
+                                    testState = TestState.Failed
+                                }
+                                portNum == null -> {
+                                    testResult = "端口无效（需 1-65535）"
+                                    testState = TestState.Failed
+                                }
+                                else -> {
+                                    enabled = true
+                                    scope.launch {
+                                        withContext(NonCancellable) {
+                                            settings.saveProxyEnabled(true)
+                                            settings.saveProxyType(type)
+                                            settings.saveProxyHost(cleanHost)
+                                            settings.saveProxyPort(portNum)
+                                            settings.saveProxyUsername(username.trim())
+                                            settings.saveProxyPassword(password)
+                                            app.api.updateProxy(true, type, cleanHost, portNum, username.trim(), password)
+                                        }
+                                        Toast.makeText(context, "代理已启用", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        } else {
+                            enabled = false
+                            scope.launch {
+                                withContext(NonCancellable) {
+                                    settings.saveProxyEnabled(false)
+                                    app.api.updateProxy(
+                                        false, type, host.trim(),
+                                        port.toIntOrNull() ?: 7890, username.trim(), password
+                                    )
+                                }
+                                Toast.makeText(context, "代理已关闭", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
                 )
             }
 

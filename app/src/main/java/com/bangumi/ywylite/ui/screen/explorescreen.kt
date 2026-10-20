@@ -348,6 +348,9 @@ fun ExploreScreen(
         swipeStep(forward, velocity)
     }
 
+    // 首拉或下拉刷新超过 10 秒没有结果：连不上时列表会一直转圈/停在旧数据，这里明确提示
+    NetworkTimeoutDialog(loading = uiState.loading || uiState.refreshing)
+
     Scaffold(
         containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {

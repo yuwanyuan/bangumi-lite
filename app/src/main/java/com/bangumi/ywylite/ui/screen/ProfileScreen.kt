@@ -6,7 +6,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -45,6 +44,7 @@ import com.bangumi.ywylite.ui.component.ImageUrls
 import com.bangumi.ywylite.ui.component.LoadingView
 import com.bangumi.ywylite.ui.component.openInBrowser
 import com.bangumi.ywylite.ui.component.wallpaperGlassPanel
+import com.bangumi.ywylite.ui.theme.LocalDarkTheme
 import androidx.compose.ui.platform.LocalContext
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CancellationException
@@ -553,7 +553,7 @@ private fun TimelineEntryRow(
     onSubjectClick: (Int) -> Unit,
     onEpisodeFallbackClick: (Int) -> Unit
 ) {
-    val darkTheme = isSystemInDarkTheme()
+    val darkTheme = LocalDarkTheme.current
     val titleShape = RoundedCornerShape(6.dp)
     val titleGlassTint = MaterialTheme.colorScheme.surface.copy(alpha = if (darkTheme) 0.72f else 0.78f)
     val displayName = entry.subjectNameCn.ifEmpty { entry.subjectName }

@@ -27,7 +27,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import com.bangumi.ywylite.App
 import com.bangumi.ywylite.ui.component.openInBrowser
 import com.bangumi.ywylite.ui.component.wallpaperGlassPanel
-import androidx.compose.foundation.isSystemInDarkTheme
+import com.bangumi.ywylite.ui.theme.LocalDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import android.content.Context
 import android.widget.Toast
@@ -307,6 +307,14 @@ fun SettingsScreen(
                             Text(label)
                         }
                     }
+                    if (bgCustomUri != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "已选择背景图，界面固定使用深色效果；移除背景图后这里的选择才会生效。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -407,7 +415,9 @@ fun SettingsScreen(
                 SettingsItem(
                     icon = Icons.Default.DarkMode,
                     title = "深色模式",
-                    subtitle = when (darkMode) {
+                    subtitle = if (bgCustomUri != null) {
+                        "已选背景图，固定深色"
+                    } else when (darkMode) {
                         "light" -> "浅色模式"
                         "dark" -> "深色模式"
                         else -> "跟随系统"
@@ -435,7 +445,7 @@ fun SettingsScreen(
                 SettingsItem(
                     icon = Icons.Default.Wallpaper,
                     title = "背景图",
-                    subtitle = if (bgCustomUri != null) "已选择图片（点击更换或移除）" else "从相册选择一张图片",
+                    subtitle = if (bgCustomUri != null) "已选择图片（界面固定深色，点击更换或移除）" else "从相册选择一张图片",
                     onClick = {
                         if (bgCustomUri == null) {
                             pickCustomImage.launch(arrayOf("image/*"))
@@ -603,7 +613,7 @@ private fun SettingsSection(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 6.dp)
-                    .then(wallpaperGlassPanel(isSystemInDarkTheme()))
+                    .then(wallpaperGlassPanel(LocalDarkTheme.current))
                     .padding(vertical = 4.dp)
             ) {
                 // AnimatedVisibility 不自带纵向布局，多个 SettingsItem 必须用 Column 包裹，

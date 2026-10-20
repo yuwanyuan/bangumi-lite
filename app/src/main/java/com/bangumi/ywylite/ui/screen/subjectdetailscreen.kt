@@ -95,6 +95,7 @@ import com.bangumi.ywylite.ui.component.EmptyView
 import com.bangumi.ywylite.ui.component.ErrorView
 import com.bangumi.ywylite.ui.component.ImageUrls
 import com.bangumi.ywylite.ui.component.LoadingView
+import com.bangumi.ywylite.ui.component.NetworkTimeoutDialog
 import com.bangumi.ywylite.ui.component.openInBrowser
 import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.CancellationException
@@ -315,6 +316,9 @@ fun SubjectDetailScreen(
             putCachedDetailState(subjectId, uiState)
         }
     }
+
+    // 连不上时详情会一直停在“加载中...”，超过 10 秒给一次明确的网络提示
+    NetworkTimeoutDialog(loading = uiState.loading)
 
     when {
         uiState.loading -> Scaffold(

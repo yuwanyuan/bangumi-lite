@@ -36,6 +36,7 @@ import com.bangumi.ywylite.ui.component.hazeWallpaperSource
 import com.bangumi.ywylite.ui.component.rememberWallpaperHazeState
 import com.bangumi.ywylite.ui.navigation.Route
 import com.bangumi.ywylite.ui.screen.*
+import com.bangumi.ywylite.ui.theme.LocalDarkTheme
 
 data class BottomNavItem(
     val route: String,
@@ -123,8 +124,9 @@ private fun BangumiAppContent(baseDensity: Density) {
         containerColor = Color.Transparent,
         bottomBar = {
             if (showBottomBar) {
-                // 有壁纸时底栏采样背后壁纸做毛玻璃；无壁纸时走默认 NavigationBar
-                val darkTheme = androidx.compose.foundation.isSystemInDarkTheme()
+                // 有壁纸时底栏采样背后壁纸做毛玻璃；无壁纸时走默认 NavigationBar。
+                // 罩色用主题实际深浅（含背景图强制的深色），不能用系统深浅
+                val darkTheme = LocalDarkTheme.current
                 NavigationBar(
                     containerColor = if (wallpaperBlur.hasWallpaper) Color.Transparent else NavigationBarDefaults.containerColor,
                     modifier = Modifier.then(wallpaperGlass(darkTheme))
