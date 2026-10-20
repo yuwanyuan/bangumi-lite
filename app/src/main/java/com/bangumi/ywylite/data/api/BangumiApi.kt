@@ -222,6 +222,21 @@ class BangumiApi(private val context: Context) {
     /** 当前 Web 端基址（含协议），供 UI 拼接用户主页等浏览器跳转 URL */
     val currentWebHost: String get() = webBaseUrl
 
+    /**
+     * 检查更新等「非 Bangumi 域名」请求复用的 OkHttp 客户端：
+     * 继承共享连接池、UA 与缓存配置，并按当前应用内代理设置派生。
+     * 每次取用重建（派生客户端共享连接池，开销很小），设置里改代理后立刻生效。
+     */
+    val appOkHttp: OkHttpClient
+        get() {
+            val builder = baseOkHttp.newBuilder()
+            buildProxyConfig()?.let { config ->
+                builder.proxy(config.proxy)
+                config.authenticator?.let { builder.proxyAuthenticator(it) }
+            }
+            return builder.build()
+        }
+
     // 直接登录用（OAuth authorization_code 授权码模式，官方不支持 password 直换）
     private val oauthAppId = "bgm72386ac2893460ce3"
     private val oauthAppSecret = "fbb6ceba1289a8854d3a88af87ac6dfd"

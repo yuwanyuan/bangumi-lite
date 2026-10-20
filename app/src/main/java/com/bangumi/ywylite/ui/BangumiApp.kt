@@ -11,12 +11,18 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -28,15 +34,22 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.bangumi.ywylite.App
+import com.bangumi.ywylite.BuildConfig
+import com.bangumi.ywylite.data.UpdateInfo
 import com.bangumi.ywylite.ui.component.AppBackground
 import com.bangumi.ywylite.ui.component.LocalWallpaperBlur
+import com.bangumi.ywylite.ui.component.UpdateAvailableDialog
 import com.bangumi.ywylite.ui.component.WallpaperBlurScope
+import com.bangumi.ywylite.ui.component.openInBrowser
 import com.bangumi.ywylite.ui.component.wallpaperGlass
 import com.bangumi.ywylite.ui.component.hazeWallpaperSource
 import com.bangumi.ywylite.ui.component.rememberWallpaperHazeState
 import com.bangumi.ywylite.ui.navigation.Route
 import com.bangumi.ywylite.ui.screen.*
 import com.bangumi.ywylite.ui.theme.LocalDarkTheme
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 data class BottomNavItem(
     val route: String,
@@ -74,6 +87,25 @@ private fun BangumiAppContent(baseDensity: Density) {
     val app = App.INSTANCE
     val token by app.settings.accessToken.collectAsState(initial = null)
     val ready by app.appReady.collectAsState()
+
+    // 自动检查更新：配置就绪后查一次 GitHub。失败静默（只有手动检查才提示），
+    // 命中的版本还要过「自动开关 / 跳过 / 24 小时静默期」三道门槛
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pendingUpdate by remember { mutableStateOf<UpdateInfo?>(null) }
+    LaunchedEffect(ready) {
+        if (!ready) return@LaunchedEffect
+        // 让首页请求先走，避免启动瞬间和壁纸/列表抢网络
+        delay(3_000)
+        val update = try {
+            app.updateChecker.checkLatest()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        } ?: return@LaunchedEffect
+        if (app.updateChecker.shouldAutoPrompt(update)) pendingUpdate = update
+    }
 
     // 主界面背景图设置（用户自选图；除详情页外所有页面透出）
     val bgMaskAlpha by app.settings.backgroundMaskAlpha.collectAsState(initial = 60)
@@ -311,6 +343,30 @@ private fun BangumiAppContent(baseDensity: Density) {
             }
         }
     }
+    }
+
+    // 自动检查发现新版本：四选项弹窗（立即更新 / 稍后提醒 / 跳过本次 / 永不检查）
+    pendingUpdate?.let { update ->
+        UpdateAvailableDialog(
+            currentVersion = BuildConfig.VERSION_NAME,
+            update = update,
+            onUpdateNow = {
+                openInBrowser(context, update.releaseUrl)
+                pendingUpdate = null
+            },
+            onRemindLater = {
+                scope.launch { app.updateChecker.snooze(update) }
+                pendingUpdate = null
+            },
+            onSkipVersion = {
+                scope.launch { app.updateChecker.skip(update) }
+                pendingUpdate = null
+            },
+            onNeverCheck = {
+                scope.launch { app.updateChecker.setAutoCheckEnabled(false) }
+                pendingUpdate = null
+            }
+        )
     }
     }
 }

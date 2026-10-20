@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -67,6 +68,13 @@ fun SettingsScreen(
     // 字体大小（标签页豁免，不随缩放）
     val fontScale by app.settings.fontScale.collectAsState(initial = 1f)
     var showFontSizeDialog by remember { mutableStateOf(false) }
+
+    // 检查更新：自动开关 + 手动检查（手动才展示当前/最新版本与失败提示）
+    val autoCheckUpdate by app.settings.autoCheckUpdate.collectAsState(initial = true)
+    var checkingUpdate by remember { mutableStateOf(false) }
+    var updateStatus by remember { mutableStateOf<String?>(null) }
+    var manualUpdate by remember { mutableStateOf<com.bangumi.ywylite.data.UpdateInfo?>(null) }
+    val currentVersion = com.bangumi.ywylite.BuildConfig.VERSION_NAME
 
     // 主界面背景图：用户自选图片 + 蒙版透明度/模糊度（各为三级档位）
     val bgMaskAlpha by app.settings.backgroundMaskAlpha.collectAsState(initial = 60)
@@ -386,6 +394,30 @@ fun SettingsScreen(
         )
     }
 
+    // 手动检查发现新版本：与自动检查共用同一个四选项弹窗
+    manualUpdate?.let { update ->
+        com.bangumi.ywylite.ui.component.UpdateAvailableDialog(
+            currentVersion = currentVersion,
+            update = update,
+            onUpdateNow = {
+                openInBrowser(context, update.releaseUrl)
+                manualUpdate = null
+            },
+            onRemindLater = {
+                scope.launch { app.updateChecker.snooze(update) }
+                manualUpdate = null
+            },
+            onSkipVersion = {
+                scope.launch { app.updateChecker.skip(update) }
+                manualUpdate = null
+            },
+            onNeverCheck = {
+                scope.launch { app.updateChecker.setAutoCheckEnabled(false) }
+                manualUpdate = null
+            }
+        )
+    }
+
     Scaffold(
         containerColor = Color.Transparent,
         topBar = {
@@ -557,6 +589,51 @@ fun SettingsScreen(
                     subtitle = "github.com/yuwanyuan/bangumi-lite",
                     onClick = { openInBrowser(context, "https://github.com/yuwanyuan/bangumi-lite") }
                 )
+                // 手动检查放在 GitHub 链接下面：显示当前版本，检查后补上最新版本。
+                // 手动检查无视「跳过 / 24 小时静默期」，失败也只在手动路径提示
+                SettingsItem(
+                    icon = Icons.Default.SystemUpdate,
+                    title = "检查更新",
+                    subtitle = when {
+                        checkingUpdate -> "正在检查…"
+                        updateStatus != null -> updateStatus!!
+                        else -> "当前版本 $currentVersion"
+                    },
+                    onClick = {
+                        if (checkingUpdate) return@SettingsItem
+                        scope.launch {
+                            checkingUpdate = true
+                            val outcome = try {
+                                Result.success(app.updateChecker.checkLatest())
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                Result.failure<com.bangumi.ywylite.data.UpdateInfo?>(e)
+                            }
+                            checkingUpdate = false
+                            outcome.onSuccess { update ->
+                                if (update != null) {
+                                    updateStatus = "当前版本 $currentVersion · 最新版本 ${update.versionName}"
+                                    manualUpdate = update
+                                } else {
+                                    updateStatus = "当前版本 $currentVersion · 已是最新版本"
+                                }
+                            }.onFailure {
+                                updateStatus = "当前版本 $currentVersion · 暂时没查到新版本"
+                                Toast.makeText(context, "暂时没查到新版本", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                )
+                SettingsSwitchItem(
+                    icon = Icons.Default.Update,
+                    title = "自动检查更新",
+                    subtitle = "启动时自动检查 GitHub 上的新版本",
+                    checked = autoCheckUpdate,
+                    onCheckedChange = { enabled ->
+                        scope.launch { app.updateChecker.setAutoCheckEnabled(enabled) }
+                    }
+                )
             }
         }
     }
@@ -639,6 +716,29 @@ private fun SettingsItem(
             Icon(icon, contentDescription = null)
         },
         modifier = Modifier.clickable(onClick = onClick),
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+    )
+}
+
+/** 开关型设置项：整行可点，右侧 Switch（点开关本身不会连带触发行点击） */
+@Composable
+private fun SettingsSwitchItem(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = { Text(subtitle) },
+        leadingContent = {
+            Icon(icon, contentDescription = null)
+        },
+        trailingContent = {
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
+        },
+        modifier = Modifier.clickable { onCheckedChange(!checked) },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent)
     )
 }

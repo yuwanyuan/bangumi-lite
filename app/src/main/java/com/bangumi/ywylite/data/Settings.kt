@@ -136,6 +136,51 @@ class Settings(private val context: Context) {
         prefs[TIMELINE_RAIL_EXPANDED_KEY] ?: false
     }
 
+    /** 启动时自动检查更新（「永不检查」会把它关掉；手动检查不受影响） */
+    val autoCheckUpdate: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[AUTO_CHECK_UPDATE_KEY] ?: true
+    }
+
+    /** 「稍后提醒」的版本标识（versionCode，旧 release 退回 versionName） */
+    val updateSnoozeKey: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[UPDATE_SNOOZE_KEY]
+    }
+
+    /** 「稍后提醒」的静默截止时间（epoch ms） */
+    val updateSnoozeUntil: Flow<Long> = context.dataStore.data.map { prefs ->
+        prefs[UPDATE_SNOOZE_UNTIL_KEY] ?: 0L
+    }
+
+    /** 「跳过本次更新」的版本标识：自动检查遇到它永不再提示 */
+    val skippedUpdateKey: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[SKIPPED_UPDATE_KEY]
+    }
+
+    suspend fun saveAutoCheckUpdate(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[AUTO_CHECK_UPDATE_KEY] = enabled
+        }
+    }
+
+    suspend fun saveUpdateSnooze(key: String?, until: Long) {
+        context.dataStore.edit { prefs ->
+            if (key != null) {
+                prefs[UPDATE_SNOOZE_KEY] = key
+                prefs[UPDATE_SNOOZE_UNTIL_KEY] = until
+            } else {
+                prefs.remove(UPDATE_SNOOZE_KEY)
+                prefs.remove(UPDATE_SNOOZE_UNTIL_KEY)
+            }
+        }
+    }
+
+    suspend fun saveSkippedUpdateKey(key: String?) {
+        context.dataStore.edit { prefs ->
+            if (key != null) prefs[SKIPPED_UPDATE_KEY] = key
+            else prefs.remove(SKIPPED_UPDATE_KEY)
+        }
+    }
+
     suspend fun saveToken(token: String) {
         context.dataStore.edit { prefs ->
             prefs[ACCESS_TOKEN_KEY] = token
@@ -294,5 +339,9 @@ class Settings(private val context: Context) {
     private val BACKGROUND_BLUR_AMOUNT_KEY = intPreferencesKey("background_blur_amount")
     private val BACKGROUND_CUSTOM_URI_KEY = stringPreferencesKey("background_custom_uri")
     private val TIMELINE_RAIL_EXPANDED_KEY = booleanPreferencesKey("timeline_rail_expanded")
+    private val AUTO_CHECK_UPDATE_KEY = booleanPreferencesKey("auto_check_update")
+    private val UPDATE_SNOOZE_KEY = stringPreferencesKey("update_snooze_key")
+    private val UPDATE_SNOOZE_UNTIL_KEY = longPreferencesKey("update_snooze_until")
+    private val SKIPPED_UPDATE_KEY = stringPreferencesKey("skipped_update_key")
     }
 }

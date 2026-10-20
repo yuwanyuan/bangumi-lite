@@ -6,6 +6,7 @@ import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.bangumi.ywylite.data.Settings
+import com.bangumi.ywylite.data.UpdateChecker
 import com.bangumi.ywylite.data.api.BangumiApi
 import com.bangumi.ywylite.data.api.ImageNetworkProxy
 import com.bangumi.ywylite.data.api.OAuthTokenRejectedException
@@ -29,6 +30,7 @@ class App : Application(), ImageLoaderFactory {
 
     val api: BangumiApi by lazy { BangumiApi(this) }
     val settings: Settings by lazy { Settings(this) }
+    val updateChecker by lazy { UpdateChecker(settings, api) }
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**

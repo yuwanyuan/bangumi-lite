@@ -57,6 +57,8 @@ android {
 
     buildFeatures {
         compose = true
+        // 检查更新要读当前 versionName/versionCode（BuildConfig 默认不生成）
+        buildConfig = true
     }
 }
 
