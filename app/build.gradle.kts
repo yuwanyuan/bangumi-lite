@@ -23,7 +23,7 @@ android {
         val tagVersion = System.getenv("APP_VERSION_NAME")?.takeIf { it.isNotBlank() }?.removePrefix("v")
         val devBuild = System.getenv("APP_DEV_BUILD")?.toIntOrNull() ?: 1
         versionCode = runNumber ?: 2
-        versionName = tagVersion ?: "1.2.5-dev.$devBuild"
+        versionName = tagVersion ?: "1.2.6-dev.$devBuild"
     }
 
     signingConfigs {
