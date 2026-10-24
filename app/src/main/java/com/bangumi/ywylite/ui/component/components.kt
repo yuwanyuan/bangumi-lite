@@ -18,7 +18,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.bangumi.ywylite.data.model.SubjectSmall
-import com.bangumi.ywylite.ui.theme.WithoutTextOutline
 
 /** 用系统默认浏览器打开链接；无浏览器可处理时不崩溃 */
 fun openInBrowser(context: Context, url: String) {
@@ -35,8 +34,6 @@ fun SubjectCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // 条目列表文字保持原样：不加黑色描边
-    WithoutTextOutline {
     Card(
         onClick = onClick,
         modifier = modifier
@@ -81,7 +78,6 @@ fun SubjectCard(
             }
         }
     }
-    }
 }
 
 @Composable
@@ -93,8 +89,6 @@ fun SubjectListItem(
     typeLabel: String? = null,
     transparentContainer: Boolean = false
 ) {
-    // 条目列表文字保持原样：不加黑色描边
-    WithoutTextOutline {
     ListItem(
         headlineContent = {
             Text(
@@ -161,7 +155,6 @@ fun SubjectListItem(
             ListItemDefaults.colors()
         }
     )
-    }
 }
 
 @Composable

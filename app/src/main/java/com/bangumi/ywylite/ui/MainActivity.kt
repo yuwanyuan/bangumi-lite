@@ -27,9 +27,8 @@ class MainActivity : ComponentActivity() {
             val context = LocalContext.current
             val darkMode by app.settings.darkMode.collectAsState(initial = "system")
             val wallpaperUri by app.settings.backgroundCustomUri.collectAsState(initial = null)
-            // 设了背景图就固定走深色效果：浅色配色压在照片上必须靠黑色文字描边才读得清，
-            // 描边观感很差（用户反馈），深色配色的前景/玻璃罩色才是为壁纸准备的那一套。
-            // 移除背景图后自动恢复按设置/系统取值。
+            // 设了背景图就固定走深色效果：深色配色的前景/玻璃罩色是为壁纸准备的那一套
+            // （用户确认的观感），浅色配色不适合压在照片上。移除背景图后自动恢复按设置/系统取值。
             val darkTheme = wallpaperUri != null || when (darkMode) {
                 "light" -> false
                 "dark" -> true

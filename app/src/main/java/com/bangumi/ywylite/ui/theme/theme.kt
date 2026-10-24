@@ -8,12 +8,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
 import androidx.core.graphics.ColorUtils
 import androidx.core.view.WindowCompat
 
@@ -102,37 +98,18 @@ private fun textShiftFor(wallpaperLuminance: Float?): Float = when {
 val LocalDarkTheme = staticCompositionLocalOf { false }
 
 /**
- * 给整套排版加黑色描边（阴影实现）：文字直接压在壁纸照片上时，
- * 纯色字在花纹/亮暗交界处会糊掉，加一圈黑边后任意背景都可读。
- * 只有设置了壁纸时才加；详情页与条目列表通过各自的主题覆盖掉（见 withTextOutline=false）。
- */
-private fun Typography.withTextOutline(enabled: Boolean, blurPx: Float): Typography {
-    if (!enabled) return this
-    val shadow = Shadow(color = Color.Black.copy(alpha = 0.85f), blurRadius = blurPx)
-    fun TextStyle.sh(): TextStyle = copy(shadow = shadow)
-    return Typography(
-        displayLarge = displayLarge.sh(), displayMedium = displayMedium.sh(), displaySmall = displaySmall.sh(),
-        headlineLarge = headlineLarge.sh(), headlineMedium = headlineMedium.sh(), headlineSmall = headlineSmall.sh(),
-        titleLarge = titleLarge.sh(), titleMedium = titleMedium.sh(), titleSmall = titleSmall.sh(),
-        bodyLarge = bodyLarge.sh(), bodyMedium = bodyMedium.sh(), bodySmall = bodySmall.sh(),
-        labelLarge = labelLarge.sh(), labelMedium = labelMedium.sh(), labelSmall = labelSmall.sh()
-    )
-}
-
-/**
  * 配色只由应用内壁纸驱动：设了壁纸就用它提取的种子色派生深色配色，
  * 没设壁纸就固定走品牌粉/品牌深色主题。
  *
  * 不用系统的 dynamicLightColorScheme/dynamicDarkColorScheme：它们跟随「系统壁纸」
  * 取色，前景色可能与实际呈现的底色不同步，出现文字看不见的问题。
  *
- * 有壁纸即固定深色：浅色配色压在照片上要靠黑色文字描边才读得清，描边观感差，
+ * 有壁纸即固定深色：深色配色的前景/玻璃罩色才是为壁纸准备的那一套（用户确认的观感），
  * 因此调用方（MainActivity）在设了背景图时直接传 darkTheme=true——
  * 用它判定的墙纸 URI 立即可用，比种子色提取完成早，换背景时不闪浅色。
  * 这里再兜一层：种子色在而 darkTheme 意外为 false 时仍走深色配色。
  *
- * [wallpaperLuminance] 为壁纸平均亮度：据此把整套前景文字往深/往浅推一档，
- * 并决定是否给文字加黑色描边（有壁纸才加）。
+ * [wallpaperLuminance] 为壁纸平均亮度：据此把整套前景文字往深/往浅推一档。
  */
 @Composable
 fun BangumiTheme(
@@ -148,9 +125,6 @@ fun BangumiTheme(
         else -> LightColors
     }
 
-    val hasWallpaper = wallpaperSeed != null
-    val typography = MaterialTheme.typography.withTextOutline(hasWallpaper, blurPx = 3.5f)
-
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
@@ -161,7 +135,6 @@ fun BangumiTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = typography,
         // 无色 Text 用 LocalContentColor 而非 colorScheme.onSurface；M3 的 MaterialTheme
         // 不提供它（由 Surface 提供），普通 Box/Column 里的 Text 会回落到默认黑色——
         // 深色模式下出现「黑底黑字」。这里全局对齐到 onBackground，普通文字随主题变色。
@@ -173,17 +146,4 @@ fun BangumiTheme(
             )
         }
     )
-}
-
-/**
- * 关掉文字描边的主题包装：详情页（自带深色封面背景）与条目列表文字
- * 按需求保持原样，用它在局部还原不带描边的排版。
- */
-@Composable
-fun WithoutTextOutline(content: @Composable () -> Unit) {
-    val base = MaterialTheme.typography
-    val clean = base.withTextOutline(enabled = false, blurPx = 0f)
-    MaterialTheme(typography = clean) {
-        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface, content = content)
-    }
 }

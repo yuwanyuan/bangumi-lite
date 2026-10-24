@@ -382,8 +382,6 @@ fun SubjectDetailScreen(
                 androidx.compose.runtime.CompositionLocalProvider(
                     androidx.compose.material3.LocalContentColor provides Color.White
                 ) {
-                    // 详情页文字保持原样：不加描边
-                    com.bangumi.ywylite.ui.theme.WithoutTextOutline {
                     SubjectDetailContent(
                         uiState = uiState,
                         onSyncCollection = { scope.launch { syncCollection() } },
@@ -485,7 +483,6 @@ fun SubjectDetailScreen(
                         onSubjectClick = onSubjectClick,
                         onBack = onBack
                     )
-                    }
                 }
             }
         }
